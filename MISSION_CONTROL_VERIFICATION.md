@@ -2,11 +2,11 @@
 
 ## Verified foundation checkpoint
 
-Current feature branch HEAD: `3cb35436d0af5d9350da8488d7325f642765623d`.
+Current feature branch HEAD at the final initial-build checkpoint: `0254ea230072c58641d8667e6c74713d7db9cda1`.
 
 GitHub Actions verification for this exact SHA:
 - Workflow: `CI`
-- Run: `#5` (ID `35363027196`)
+- Run: `#13` (ID `35363595432`)
 - Conclusion: `success`
 
 This proves the repository's configured CI build completed successfully for this revision. It does not prove every runtime behavior or user workflow.
@@ -29,10 +29,10 @@ The read-only inspector compares `main...HEAD` through GitHub's compare API.
 
 Verified comparison at this checkpoint:
 - base: `0a20dc2d4fbe9876a4470f4d20fd2519a111e1f6`
-- head: `3cb35436d0af5d9350da8488d7325f642765623d`
-- ahead: 9
+- head: `0254ea230072c58641d8667e6c74713d7db9cda1`
+- ahead: 17
 - behind: 0
-- changed files: 7
+- changed files: 10
 
 The seven changed paths are:
 - `.github/workflows/ci.yml`

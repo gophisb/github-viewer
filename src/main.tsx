@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "../App";
 import MissionControl from "./mission-control";
+import MissionRuntimeLauncher from "./mission-runtime-launcher";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -9,6 +10,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <>
       <App />
       <MissionControl />
+      <MissionRuntimeLauncher />
     </>
   </React.StrictMode>
 );

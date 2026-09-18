@@ -51,3 +51,5 @@ jobs:
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
+
+# retrigger Pages deployment after switching the Pages source to GitHub Actions

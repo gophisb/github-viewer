@@ -110,6 +110,7 @@ export default function MissionControl() {
   const [memory, setMemory] = useState<Memory>(loadMemory());
   const [task, setTask] = useState("");
   const [message, setMessage] = useState("");
+  const [ciStatus, setCiStatus] = useState<string>("NOT_CHECKED");
 
   const gate = useMemo(() => {
     if (!evidence.length) return "NOT_RUN";
@@ -117,6 +118,47 @@ export default function MissionControl() {
     if (evidence.some(e => e.status === "WARN")) return "REVIEW";
     return "PASS";
   }, [evidence]);
+
+  const verifyCI = async () => {
+    if (!xray?.sha) { setMessage("شغّل X-Ray أولاً."); return; }
+    setBusy(true); setMessage("");
+    try {
+      const ownerRepo = xray.repo;
+      const data = await gh<any>(`/repos/${ownerRepo}/actions/runs?head_sha=${encodeURIComponent(xray.sha)}&per_page=20`);
+      const runs = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
+      if (!runs.length) {
+        setCiStatus("NO_RUN");
+        setEvidence(prev => [...prev.filter(e => e.id !== "CI-002"), {
+          id: "CI-002", label: "GitHub Actions evidence", status: "WARN",
+          detail: "لا توجد workflow run مرتبطة بهذا SHA؛ لا يمكن إثبات build/test من هذه النقطة."
+        }]);
+        return;
+      }
+      const completed = runs.find((r: any) => r.status === "completed");
+      if (!completed) {
+        setCiStatus("IN_PROGRESS");
+        setEvidence(prev => [...prev.filter(e => e.id !== "CI-002"), {
+          id: "CI-002", label: "GitHub Actions evidence", status: "WARN",
+          detail: `Workflow موجودة لكن لم تكتمل بعد: ${runs[0].name || "CI"}.`
+        }]);
+        return;
+      }
+      const passed = completed.conclusion === "success";
+      setCiStatus(completed.conclusion || completed.status);
+      setEvidence(prev => [...prev.filter(e => e.id !== "CI-002"), {
+        id: "CI-002", label: "GitHub Actions evidence", status: passed ? "PASS" : "BLOCK",
+        detail: `${completed.name || "CI"} · ${completed.conclusion} · run #${completed.run_number ?? "?"} · SHA ${xray.sha.slice(0, 12)}`
+      }]);
+      setAgentLog(prev => [...prev, `VERIFY → CI ${passed ? "PASS" : "BLOCK"} · ${completed.name || "workflow"}`]);
+    } catch (e) {
+      setCiStatus("ERROR");
+      setEvidence(prev => [...prev.filter(e => e.id !== "CI-002"), {
+        id: "CI-002", label: "GitHub Actions evidence", status: "WARN",
+        detail: "تعذر قراءة GitHub Actions؛ لم يتم تحويل الفشل إلى PASS."
+      }]);
+      setMessage(e instanceof Error ? e.message : "فشل التحقق من CI.");
+    } finally { setBusy(false); }
+  };
 
   const inspect = async () => {
     const value = repoInput.trim().replace(/^https?:\/\/github\.com\//, "").replace(/\/$/, "");
@@ -145,7 +187,7 @@ export default function MissionControl() {
 
   const checkpoint = () => {
     const stamp = new Date().toISOString();
-    const label = `${stamp} · level=L${level} · gate=${gate} · repo=${xray?.repo || "none"}`;
+    const label = `${stamp} · level=L${level} · gate=${gate} · repo=${xray?.repo || "none"} · sha=${xray?.sha?.slice(0, 12) || "none"}`;
     const next = { ...memory, checkpoints: [...memory.checkpoints, label] };
     setMemory(next); saveMemory(next);
   };
@@ -175,6 +217,7 @@ export default function MissionControl() {
                     <button disabled={busy || level < 1} onClick={inspect} className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold disabled:opacity-40">{busy ? "يفحص..." : "X-Ray"}</button>
                   </div>
                   {message && <p className="mt-3 text-sm text-amber-300">{message}</p>}
+                  <div className="mt-3 flex flex-wrap gap-2"><button disabled={busy || !xray} onClick={verifyCI} className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-300 disabled:opacity-40">تحقق من CI</button><span className="self-center text-[11px] text-slate-500">CI: {ciStatus}</span></div>
                   <div className="mt-3 text-xs text-slate-500">الوكيل هنا Read-only: لا commit، لا PR، لا deploy. الكتابة مؤجلة إلى مستوى صلاحيات مستقل.</div>
                 </div>
 

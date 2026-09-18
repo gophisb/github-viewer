@@ -15,8 +15,10 @@ This branch adds the first governed engineering layer to github-viewer.
 
 ## Verified foundation checkpoint
 
-The feature branch currently points to:
-`3cb35436d0af5d9350da8488d7325f642765623d`.
+The feature branch final initial-build checkpoint is:
+`0254ea230072c58641d8667e6c74713d7db9cda1`.
+
+The runtime expansion is documented in `GOVERNED_RUNTIME.md`.
 
 The GitHub Actions CI run for this exact revision completed successfully. This is build evidence for the revision, not a blanket proof of runtime correctness.
 

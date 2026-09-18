@@ -1,4 +1,4 @@
-const CACHE_NAME = "github-viewer-v3";
+const CACHE_NAME = "github-viewer-v4";
 const APP_SHELL = [
   new URL("./", self.location).href,
   new URL("./index.html", self.location).href,
@@ -32,18 +32,9 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
 
-  if (url.hostname === "api.github.com") {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-          return response;
-        })
-        .catch(() => caches.match(request))
-    );
-    return;
-  }
+  // Never persist GitHub API responses in Cache Storage.
+  // Authenticated responses may contain private repository data.
+  if (url.hostname === "api.github.com") return;
 
   event.respondWith(
     caches.match(request).then((cached) => {

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type GitHubUser = {
   login: string;
@@ -6,32 +6,60 @@ type GitHubUser = {
   avatar_url: string;
   html_url: string;
   bio: string | null;
-  blog: string;
   location: string | null;
   company: string | null;
-  email: string | null;
   public_repos: number;
-  public_gists: number;
   followers: number;
   following: number;
   created_at: string;
-  twitter_username: string | null;
 };
 
 type Repo = {
   id: number;
   name: string;
+  full_name: string;
   html_url: string;
   description: string | null;
   language: string | null;
   stargazers_count: number;
   forks_count: number;
   watchers_count: number;
+  private: boolean;
   fork: boolean;
   updated_at: string;
-  topics: string[];
+  default_branch: string;
+  topics?: string[];
   size: number;
 };
+
+type RepoItem = {
+  name: string;
+  path: string;
+  sha: string;
+  size?: number;
+  type: "file" | "dir";
+  download_url?: string | null;
+  html_url?: string;
+};
+
+type FileResponse = RepoItem & {
+  type: "file";
+  content?: string;
+  encoding?: string;
+  size: number;
+};
+
+type Activity = {
+  id: string;
+  type: string;
+  repo?: { name: string };
+  created_at: string;
+};
+
+const API = "https://api.github.com";
+const API_VERSION = "2022-11-28";
+const TOKEN_KEY = "github-viewer-token";
+const CACHE_KEY = "github-viewer-dashboard";
 
 const LANG_COLORS: Record<string, string> = {
   JavaScript: "#f1e05a",
@@ -51,433 +79,556 @@ const LANG_COLORS: Record<string, string> = {
   Shell: "#89e051",
   HTML: "#e34c26",
   CSS: "#563d7c",
-  Vue: "#41b883",
-  SCSS: "#c6538c",
-  Jupyter: "#DA5B0B",
-  Solidity: "#AA6746",
-  Lua: "#000080",
 };
 
-const fetcher = async (url: string) => {
-  const res = await fetch(url, {
-    headers: { Accept: "application/vnd.github+json" },
+function getStoredToken() {
+  try {
+    return localStorage.getItem(TOKEN_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+async function githubFetch<T>(path: string, token = getStoredToken()): Promise<T> {
+  const response = await fetch(path.startsWith("http") ? path : API + path, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": API_VERSION,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
   });
-  if (res.status === 404) {
-    const err = new Error("لم يتم العثور على المستخدم") as Error & {
-      code?: number;
-    };
-    err.code = 404;
-    throw err;
-  }
-  if (res.status === 403) {
-    const err = new Error("تم تجاوز حد الطلبات (GitHub rate limit)") as Error & {
-      code?: number;
-    };
-    err.code = 403;
-    throw err;
-  }
-  if (!res.ok) throw new Error("حدث خطأ أثناء جلب البيانات");
-  return res.json();
-};
 
-function StatCard({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: number | string;
-  accent: string;
-}) {
+  if (response.status === 401) throw new Error("رمز GitHub غير صالح أو منتهي الصلاحية.");
+  if (response.status === 403) throw new Error("رفض GitHub الطلب أو تم تجاوز حد الطلبات.");
+  if (response.status === 404) throw new Error("لم يتم العثور على المورد أو لا يملك الرمز صلاحية الوصول إليه.");
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(body || `GitHub API: ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+async function fetchAllRepos(token: string) {
+  const all: Repo[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const batch = await githubFetch<Repo[]>(
+      `/user/repos?per_page=100&page=${page}&sort=updated&direction=desc&visibility=all&affiliation=owner,collaborator,organization_member`,
+      token
+    );
+    all.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return all;
+}
+
+function formatDate(value: string) {
+  return new Date(value).toLocaleDateString("ar-EG", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function Icon({ children }: { children: React.ReactNode }) {
+  return <span className="inline-flex h-5 w-5 items-center justify-center">{children}</span>;
+}
+
+function StatCard({ label, value, icon }: { label: string; value: number | string; icon: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur transition hover:bg-white/10">
-      <div
-        className="text-2xl font-bold tabular-nums"
-        style={{ color: accent }}
-      >
-        {value}
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+      <div className="flex items-center justify-between">
+        <span className="text-2xl font-bold text-white">{value}</span>
+        <span className="text-xl">{icon}</span>
       </div>
-      <div className="mt-1 text-xs font-medium uppercase tracking-wider text-slate-400">
-        {label}
+      <div className="mt-1 text-xs text-slate-400">{label}</div>
+    </div>
+  );
+}
+
+function RepoCard({ repo, onOpen }: { repo: Repo; onOpen: (repo: Repo) => void }) {
+  return (
+    <button
+      onClick={() => onOpen(repo)}
+      className="group flex h-full w-full flex-col rounded-2xl border border-white/10 bg-white/5 p-4 text-right transition hover:border-indigo-400/50 hover:bg-white/10"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="truncate font-semibold text-slate-100 group-hover:text-indigo-300" dir="ltr">
+            {repo.name}
+          </h3>
+          <p className="mt-1 text-[11px] text-slate-500" dir="ltr">{repo.full_name}</p>
+        </div>
+        <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${repo.private ? "bg-amber-500/15 text-amber-300" : "bg-emerald-500/15 text-emerald-300"}`}>
+          {repo.private ? "خاص" : "عام"}
+        </span>
+      </div>
+      <p className="mt-3 line-clamp-2 text-sm text-slate-400">
+        {repo.description || "لا يوجد وصف"}
+      </p>
+      <div className="mt-auto flex flex-wrap items-center gap-3 pt-4 text-xs text-slate-400">
+        {repo.language && (
+          <span className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: LANG_COLORS[repo.language] || "#8b949e" }} />
+            {repo.language}
+          </span>
+        )}
+        <span>★ {repo.stargazers_count}</span>
+        <span>⑂ {repo.forks_count}</span>
+        <span>{formatDate(repo.updated_at)}</span>
+      </div>
+    </button>
+  );
+}
+
+function ConnectionScreen({
+  onConnect,
+  onPublic,
+  error,
+}: {
+  onConnect: (token: string) => void;
+  onPublic: (login: string) => void;
+  error: string;
+}) {
+  const [token, setToken] = useState("");
+  const [publicUser, setPublicUser] = useState("");
+  const [showToken, setShowToken] = useState(false);
+
+  return (
+    <div className="mx-auto max-w-3xl px-4 py-10 sm:py-16">
+      <div className="text-center">
+        <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-600 shadow-lg shadow-indigo-500/30">
+          <svg viewBox="0 0 24 24" className="h-9 w-9 fill-current text-white">
+            <path d="M12 .5C5.37.5 0 5.78 0 12.29c0 5.21 3.44 9.62 8.21 11.18.6.11.82-.25.82-.56 0-.27-.01-1.16-.02-2.1-3.34.71-4.04-1.41-4.04-1.41-.55-1.35-1.34-1.71-1.34-1.71-1.09-.72.08-.71.08-.71 1.21.08 1.84 1.21 1.84 1.21 1.07 1.8 2.81 1.28 3.5.98.11-.76.42-1.28.76-1.57-2.67-.3-5.47-1.31-5.47-5.83 0-1.29.47-2.34 1.24-3.17-.13-.3-.54-1.52.12-3.17 0 0 1.01-.32 3.3 1.21a11.6 11.6 0 0 1 6 0c2.29-1.53 3.3-1.21 3.3-1.21.66 1.65.25 2.87.12 3.17.77.83 1.23 1.88 1.23 3.17 0 4.53-2.81 5.52-5.49 5.81.43.37.81 1.1.81 2.22 0 1.6-.01 2.9-.01 3.29 0 .31.21.68.83.56A11.81 11.81 0 0 0 24 12.29C24 5.78 18.63.5 12 .5z" />
+          </svg>
+        </div>
+        <h1 className="text-3xl font-extrabold sm:text-4xl">لوحة GitHub</h1>
+        <p className="mx-auto mt-3 max-w-xl text-slate-400">
+          تكامل مباشر مع GitHub REST API. اربط حسابك واستعرض مستودعاتك العامة والخاصة من لوحة واحدة.
+        </p>
+      </div>
+
+      <div className="mt-8 rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur sm:p-8">
+        <div className="flex items-center gap-3">
+          <span className="text-2xl">🔐</span>
+          <div>
+            <h2 className="font-semibold">ربط حساب GitHub</h2>
+            <p className="text-xs text-slate-400">يُرسل الرمز إلى api.github.com فقط.</p>
+          </div>
+        </div>
+
+        <div className="mt-5 flex gap-2">
+          <input
+            type={showToken ? "text" : "password"}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="Personal Access Token"
+            className="min-w-0 flex-1 rounded-xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-white outline-none focus:border-indigo-400/60"
+            dir="ltr"
+            autoComplete="off"
+          />
+          <button onClick={() => setShowToken(!showToken)} className="rounded-xl border border-white/10 px-4 text-sm text-slate-300">
+            {showToken ? "إخفاء" : "إظهار"}
+          </button>
+        </div>
+
+        <button
+          onClick={() => onConnect(token)}
+          disabled={!token.trim()}
+          className="mt-3 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-5 py-3 font-semibold text-white disabled:opacity-40"
+        >
+          ربط الحساب
+        </button>
+
+        <div className="mt-4 rounded-xl bg-slate-950/40 p-4 text-sm text-slate-400">
+          <p className="font-medium text-slate-200">إنشاء الرمز</p>
+          <p className="mt-2">أنشئ Personal Access Token بصلاحيات القراءة المناسبة لمستودعاتك. للقراءة فقط يكفي منح الصلاحيات اللازمة مثل Contents: Read.</p>
+          <a
+            href="https://github.com/settings/personal-access-tokens/new"
+            target="_blank"
+            rel="noreferrer"
+            className="mt-3 inline-block text-indigo-300 hover:underline"
+          >
+            فتح إعدادات GitHub لإنشاء رمز ↗
+          </a>
+        </div>
+
+        <div className="my-6 flex items-center gap-3">
+          <div className="h-px flex-1 bg-white/10" />
+          <span className="text-xs text-slate-500">أو بدون ربط</span>
+          <div className="h-px flex-1 bg-white/10" />
+        </div>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            onPublic(publicUser);
+          }}
+          className="flex gap-2"
+        >
+          <input
+            value={publicUser}
+            onChange={(e) => setPublicUser(e.target.value)}
+            placeholder="اسم مستخدم عام مثل torvalds"
+            className="min-w-0 flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none focus:border-indigo-400/60"
+            dir="ltr"
+          />
+          <button className="rounded-xl border border-white/10 px-5 py-3 text-sm font-semibold text-slate-200 hover:bg-white/10">
+            حساب عام
+          </button>
+        </form>
+
+        {error && <div className="mt-5 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
+      </div>
+
+      <div className="mt-5 grid gap-3 sm:grid-cols-3">
+        {["مستودعات عامة وخاصة", "بحث وفرز وتصفية", "شجرة الملفات والمحتوى"].map((item) => (
+          <div key={item} className="rounded-2xl border border-white/10 bg-white/5 p-4 text-center text-sm text-slate-300">{item}</div>
+        ))}
       </div>
     </div>
   );
 }
 
-function RepoCard({ repo }: { repo: Repo }) {
-  return (
-    <a
-      href={repo.html_url}
-      target="_blank"
-      rel="noreferrer"
-      className="group flex h-full flex-col rounded-2xl border border-white/10 bg-white/5 p-4 transition hover:border-indigo-400/50 hover:bg-white/10"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <h4 className="truncate font-semibold text-slate-100 group-hover:text-indigo-300">
-          {repo.name}
-        </h4>
-        {repo.fork && (
-          <span className="shrink-0 rounded-full bg-slate-700 px-2 py-0.5 text-[10px] font-medium text-slate-300">
-            Fork
-          </span>
-        )}
-      </div>
-      <p className="mt-1 line-clamp-2 text-sm text-slate-400">
-        {repo.description || "لا يوجد وصف"}
-      </p>
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        {repo.topics.slice(0, 3).map((t) => (
-          <span
-            key={t}
-            className="rounded-full bg-indigo-500/20 px-2 py-0.5 text-[10px] font-medium text-indigo-300"
-          >
-            {t}
-          </span>
-        ))}
-      </div>
-      <div className="mt-auto flex items-center gap-4 pt-3 text-xs text-slate-400">
-        {repo.language && (
-          <span className="flex items-center gap-1.5">
-            <span
-              className="h-2.5 w-2.5 rounded-full"
-              style={{ background: LANG_COLORS[repo.language] || "#8b949e" }}
-            />
-            {repo.language}
-          </span>
-        )}
-        <span className="flex items-center gap-1">★ {repo.stargazers_count}</span>
-        <span className="flex items-center gap-1">⑂ {repo.forks_count}</span>
-      </div>
-    </a>
-  );
-}
-
 export default function App() {
-  const [query, setQuery] = useState("");
+  const [token, setToken] = useState(getStoredToken());
   const [user, setUser] = useState<GitHubUser | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
+  const [activity, setActivity] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  // منطق تثبيت التطبيق (PWA) على الهاتف
+  const [publicMode, setPublicMode] = useState(false);
+  const [query, setQuery] = useState("");
+  const [language, setLanguage] = useState("الكل");
+  const [sort, setSort] = useState("updated");
+  const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
+  const [path, setPath] = useState("");
+  const [items, setItems] = useState<RepoItem[]>([]);
+  const [file, setFile] = useState<FileResponse | null>(null);
+  const [repoLoading, setRepoLoading] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<Event | null>(null);
   const [canInstall, setCanInstall] = useState(false);
-  const [isStandalone, setIsStandalone] = useState(false);
-  const [showIosHint, setShowIosHint] = useState(false);
+
+  const connect = async (newToken: string) => {
+    const clean = newToken.trim();
+    if (!clean) return;
+    setLoading(true);
+    setError("");
+    try {
+      const me = await githubFetch<GitHubUser>("/user", clean);
+      const [allRepos, events] = await Promise.all([
+        fetchAllRepos(clean),
+        githubFetch<Activity[]>(`/users/${me.login}/events?per_page=20`, clean).catch(() => []),
+      ]);
+      localStorage.setItem(TOKEN_KEY, clean);
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ user: me, repos: allRepos, activity: events }));
+      setToken(clean);
+      setUser(me);
+      setRepos(allRepos);
+      setActivity(events);
+      setPublicMode(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "فشل الاتصال.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadPublic = async (login: string) => {
+    const clean = login.trim();
+    if (!clean) return;
+    setLoading(true);
+    setError("");
+    try {
+      const me = await githubFetch<GitHubUser>(`/users/${clean}`, "");
+      const publicRepos = await githubFetch<Repo[]>(`/users/${clean}/repos?per_page=100&sort=updated`, "");
+      const events = await githubFetch<Activity[]>(`/users/${clean}/events/public?per_page=20`, "").catch(() => []);
+      setUser(me);
+      setRepos(publicRepos);
+      setActivity(events);
+      setPublicMode(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "فشل تحميل الحساب.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const detect = () => {
-      const standalone =
-        window.matchMedia?.("(display-mode: standalone)").matches ||
-        (navigator as Navigator & { standalone?: boolean }).standalone === true;
-      setIsStandalone(!!standalone);
-    };
-    detect();
+    if (!token) return;
+    setLoading(true);
+    Promise.all([
+      githubFetch<GitHubUser>("/user", token),
+      fetchAllRepos(token),
+      githubFetch<Activity[]>(`/user/events?per_page=20`, token).catch(() => []),
+    ])
+      .then(([me, allRepos, events]) => {
+        setUser(me);
+        setRepos(allRepos);
+        setActivity(events);
+        setPublicMode(false);
+      })
+      .catch(() => {
+        localStorage.removeItem(TOKEN_KEY);
+        setToken("");
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
+  useEffect(() => {
     const onPrompt = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e);
       setCanInstall(true);
     };
-    const onInstalled = () => {
-      setCanInstall(false);
-      setDeferredPrompt(null);
-      setIsStandalone(true);
-    };
     window.addEventListener("beforeinstallprompt", onPrompt);
-    window.addEventListener("appinstalled", onInstalled);
-
-    const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    setShowIosHint(isIos && !window.matchMedia("(display-mode: standalone)").matches);
-
-    return () => {
-      window.removeEventListener("beforeinstallprompt", onPrompt);
-      window.removeEventListener("appinstalled", onInstalled);
-    };
+    return () => window.removeEventListener("beforeinstallprompt", onPrompt);
   }, []);
 
-  const installApp = async () => {
-    if (!deferredPrompt) return;
-    const promptEvent = deferredPrompt as Event & {
-      prompt: () => void;
-      userChoice: Promise<{ outcome: string }>;
-    };
-    promptEvent.prompt();
-    const choice = await promptEvent.userChoice;
-    if (choice.outcome === "accepted") {
-      setCanInstall(false);
-      setDeferredPrompt(null);
+  const languages = useMemo(
+    () => ["الكل", ...Array.from(new Set(repos.map((r) => r.language).filter(Boolean) as string[])).sort()],
+    [repos]
+  );
+
+  const filteredRepos = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    return repos
+      .filter((r) => !q || `${r.name} ${r.full_name} ${r.description || ""}`.toLowerCase().includes(q))
+      .filter((r) => language === "الكل" || r.language === language)
+      .sort((a, b) => {
+        if (sort === "stars") return b.stargazers_count - a.stargazers_count;
+        if (sort === "forks") return b.forks_count - a.forks_count;
+        if (sort === "name") return a.name.localeCompare(b.name);
+        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+      });
+  }, [repos, query, language, sort]);
+
+  const totalStars = repos.reduce((sum, r) => sum + r.stargazers_count, 0);
+  const totalForks = repos.reduce((sum, r) => sum + r.forks_count, 0);
+
+  const openRepo = async (repo: Repo) => {
+    setSelectedRepo(repo);
+    setPath("");
+    setFile(null);
+    setRepoLoading(true);
+    setError("");
+    try {
+      const root = await githubFetch<RepoItem[]>(
+        `/repos/${repo.full_name}/contents?ref=${encodeURIComponent(repo.default_branch)}`,
+        token
+      );
+      setItems(root);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "تعذر فتح المستودع.");
+    } finally {
+      setRepoLoading(false);
     }
   };
 
-  const search = useCallback(async (name: string) => {
-    const clean = name.trim();
-    if (!clean) return;
-    setLoading(true);
+  const openPath = async (nextPath: string, type: "dir" | "file") => {
+    if (!selectedRepo) return;
+    setRepoLoading(true);
     setError("");
+    try {
+      const result = await githubFetch<RepoItem | RepoItem[]>(
+        `/repos/${selectedRepo.full_name}/contents/${nextPath.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(selectedRepo.default_branch)}`,
+        token
+      );
+      if (type === "dir") {
+        setPath(nextPath);
+        setFile(null);
+        setItems(Array.isArray(result) ? result : []);
+      } else {
+        setFile(result as FileResponse);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "تعذر فتح الملف.");
+    } finally {
+      setRepoLoading(false);
+    }
+  };
+
+  const decodeFile = (value: FileResponse) => {
+    if (!value.content) return "";
+    try {
+      const binary = atob(value.content.replace(/\n/g, ""));
+      const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
+    } catch {
+      return "تعذر فك محتوى الملف في المتصفح.";
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem(TOKEN_KEY);
+    setToken("");
     setUser(null);
     setRepos([]);
-    try {
-      const [userData, repoData] = await Promise.all([
-        fetcher(`https://api.github.com/users/${clean}`),
-        fetcher(
-          `https://api.github.com/users/${clean}/repos?per_page=100&sort=updated`
-        ),
-      ]);
-      setUser(userData);
-      setRepos(
-        (repoData as Repo[])
-          .filter((r) => !r.fork)
-          .sort((a, b) => b.stargazers_count - a.stargazers_count)
-      );
-    } catch (e) {
-      const err = e as Error & { code?: number };
-      setError(err.message || "حدث خطأ غير متوقع");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    setActivity([]);
+    setSelectedRepo(null);
+    setFile(null);
+  };
 
-  useEffect(() => {
-    search("torvalds");
-  }, [search]);
+  const installApp = async () => {
+    if (!deferredPrompt) return;
+    const prompt = deferredPrompt as Event & { prompt: () => void; userChoice: Promise<{ outcome: string }> };
+    prompt.prompt();
+    await prompt.userChoice;
+    setDeferredPrompt(null);
+    setCanInstall(false);
+  };
 
-  // تسجيل أداة العمل (Service Worker) لتفعيل ميزات التطبيق التقدّمي PWA
-  useEffect(() => {
-    if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => {
-        navigator.serviceWorker.register("./sw.js").catch(() => {
-          /* التسجيل اختياري — نتجاهل الفشل بهدوء */
-        });
-      });
-    }
-  }, []);
-
-  const totalStars = repos.reduce((s, r) => s + r.stargazers_count, 0);
-
-  const langStats = (() => {
-    const counts: Record<string, number> = {};
-    repos.forEach((r) => {
-      if (r.language) counts[r.language] = (counts[r.language] || 0) + 1;
-    });
-    const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-    const total = entries.reduce((s, [, v]) => s + v, 0) || 1;
-    return entries.map(([lang, count]) => ({
-      lang,
-      count,
-      pct: (count / total) * 100,
-    }));
-  })();
+  if (!user && !loading) {
+    return (
+      <div className="min-h-screen bg-[radial-gradient(125%_125%_at_50%_0%,#1e1b4b_0%,#0f172a_50%,#020617_100%)] text-slate-100">
+        <ConnectionScreen onConnect={connect} onPublic={loadPublic} error={error} />
+        <footer className="border-t border-white/5 py-6 text-center text-xs text-slate-500">GitHub REST API · يعمل مباشرة من المتصفح</footer>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[radial-gradient(125%_125%_at_50%_0%,#1e1b4b_0%,#0f172a_50%,#020617_100%)] text-slate-100">
-      <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 lg:px-8">
-        {/* Header */}
-        <div className="text-center">
-          <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-600 shadow-lg shadow-indigo-500/30">
-            <svg viewBox="0 0 24 24" className="h-8 w-8 fill-current">
-              <path d="M12 .5C5.37.5 0 5.78 0 12.29c0 5.21 3.44 9.62 8.21 11.18.6.11.82-.25.82-.56 0-.27-.01-1.16-.02-2.1-3.34.71-4.04-1.41-4.04-1.41-.55-1.35-1.34-1.71-1.34-1.71-1.09-.72.08-.71.08-.71 1.21.08 1.84 1.21 1.84 1.21 1.07 1.8 2.81 1.28 3.5.98.11-.76.42-1.28.76-1.57-2.67-.3-5.47-1.31-5.47-5.83 0-1.29.47-2.34 1.24-3.17-.13-.3-.54-1.52.12-3.17 0 0 1.01-.32 3.3 1.21a11.6 11.6 0 0 1 6 0c2.29-1.53 3.3-1.21 3.3-1.21.66 1.65.25 2.87.12 3.17.77.83 1.23 1.88 1.23 3.17 0 4.53-2.81 5.52-5.49 5.81.43.37.81 1.1.81 2.22 0 1.6-.01 2.9-.01 3.29 0 .31.21.68.83.56A11.81 11.81 0 0 0 24 12.29C24 5.78 18.63.5 12 .5z" />
-            </svg>
-          </div>
-          <h1 className="bg-gradient-to-r from-indigo-300 via-white to-fuchsia-300 bg-clip-text text-3xl font-extrabold tracking-tight text-transparent sm:text-4xl">
-            عارض ملف GitHub
-          </h1>
-          <p className="mx-auto mt-2 max-w-md text-sm text-slate-400">
-            أدخل اسم المستخدم على GitHub لعرض ملفه الشخصي ومستودعاته ولغاته
-            البرمجية — مدمج مباشرة مع GitHub API.
-          </p>
-        </div>
-
-        {/* شريط تثبيت التطبيق على الهاتف */}
-        {!isStandalone && (canInstall || showIosHint) && (
-          <div className="mt-6 flex flex-col items-center gap-3 rounded-2xl border border-indigo-400/30 bg-indigo-500/10 p-4 text-center sm:flex-row sm:justify-between sm:text-right">
-            <div className="flex items-center gap-3">
-              <span className="text-2xl">📲</span>
-              <p className="text-sm text-indigo-100">
-                {canInstall
-                  ? "ثبّت التطبيق على هاتفك للوصول إليه كأي تطبيق native"
-                  : "لتثبيت التطبيق: اضغط مشاركة ثم «أضف إلى الشاشة الرئيسية»"}
-              </p>
-            </div>
-            {canInstall && (
-              <button
-                onClick={installApp}
-                className="shrink-0 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition hover:opacity-90"
-              >
-                تثبيت التطبيق
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* Search */}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            search(query);
-          }}
-          className="mt-8 flex gap-2"
-        >
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="مثال: torvalds، facebook، vercel..."
-            className="flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-100 placeholder-slate-500 outline-none transition focus:border-indigo-400/60 focus:ring-2 focus:ring-indigo-500/30"
-            dir="ltr"
-          />
-          <button
-            type="submit"
-            disabled={loading}
-            className="rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition hover:opacity-90 disabled:opacity-50"
-          >
-            {loading ? "جارٍ التحميل..." : "بحث"}
-          </button>
-        </form>
-
-        {/* Error */}
-        {error && (
-          <div className="mt-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-            {error}
-          </div>
-        )}
-
-        {/* Loading */}
-        {loading && (
-          <div className="mt-10 flex justify-center">
-            <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-indigo-400" />
-          </div>
-        )}
-
-        {/* Profile */}
-        {user && !loading && (
-          <div className="mt-10 space-y-6">
-            <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur sm:p-8">
-              <div className="flex flex-col items-center gap-5 sm:flex-row sm:items-start">
-                <img
-                  src={user.avatar_url}
-                  alt={user.login}
-                  className="h-24 w-24 rounded-2xl border-2 border-white/10 shadow-xl"
-                />
-                <div className="flex-1 text-center sm:text-right">
-                  <h2 className="text-2xl font-bold">
-                    {user.name || user.login}
-                  </h2>
-                  <a
-                    href={user.html_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-sm text-indigo-300 hover:underline"
-                    dir="ltr"
-                  >
-                    @{user.login}
-                  </a>
-                  {user.bio && (
-                    <p className="mt-2 text-sm text-slate-300">{user.bio}</p>
-                  )}
-                  <div className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-slate-400 sm:justify-start">
-                    {user.company && <span>🏢 {user.company}</span>}
-                    {user.location && <span>📍 {user.location}</span>}
-                    {user.blog && (
-                      <a
-                        href={
-                          user.blog.startsWith("http")
-                            ? user.blog
-                            : `https://${user.blog}`
-                        }
-                        target="_blank"
-                        rel="noreferrer"
-                        className="hover:text-indigo-300 hover:underline"
-                        dir="ltr"
-                      >
-                        🔗 {user.blog}
-                      </a>
-                    )}
-                    {user.twitter_username && (
-                      <span>𝕏 @{user.twitter_username}</span>
-                    )}
-                    <span>
-                      📅 انضم في{" "}
-                      {new Date(user.created_at).toLocaleDateString("ar-EG", {
-                        year: "numeric",
-                        month: "long",
-                      })}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Stats */}
-              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <StatCard label="المستودعات" value={user.public_repos} accent="#818cf8" />
-                <StatCard label="النجوم" value={totalStars} accent="#fbbf24" />
-                <StatCard label="المتابعون" value={user.followers} accent="#34d399" />
-                <StatCard label="يتابع" value={user.following} accent="#f472b6" />
-              </div>
-            </div>
-
-            {/* Languages */}
-            {langStats.length > 0 && (
-              <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur sm:p-8">
-                <h3 className="text-lg font-semibold text-slate-100">
-                  توزيع اللغات
-                </h3>
-                <div className="mt-4 flex h-3 w-full overflow-hidden rounded-full bg-white/5">
-                  {langStats.map((l) => (
-                    <div
-                      key={l.lang}
-                      style={{
-                        width: `${l.pct}%`,
-                        background: LANG_COLORS[l.lang] || "#8b949e",
-                      }}
-                      title={`${l.lang}: ${l.count}`}
-                    />
-                  ))}
-                </div>
-                <div className="mt-4 flex flex-wrap gap-3">
-                  {langStats.slice(0, 8).map((l) => (
-                    <span
-                      key={l.lang}
-                      className="flex items-center gap-1.5 text-xs text-slate-300"
-                    >
-                      <span
-                        className="h-2.5 w-2.5 rounded-full"
-                        style={{ background: LANG_COLORS[l.lang] || "#8b949e" }}
-                      />
-                      {l.lang} ({l.count})
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Repos */}
+      <header className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/80 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-fuchsia-600">⌘</div>
             <div>
+              <h1 className="font-bold">لوحة GitHub</h1>
+              <p className="text-[11px] text-slate-500">{publicMode ? "استعراض عام" : "متصل بحسابك"}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {canInstall && (
+              <button onClick={installApp} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300">📲 تثبيت</button>
+            )}
+            {user && <img src={user.avatar_url} alt={user.login} className="h-8 w-8 rounded-full" />}
+            {!publicMode && token && <button onClick={logout} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300">فصل الحساب</button>}
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-6xl px-4 py-6">
+        {error && <div className="mb-5 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
+
+        {selectedRepo ? (
+          <section>
+            <button onClick={() => setSelectedRepo(null)} className="mb-5 text-sm text-indigo-300 hover:underline">← العودة إلى المستودعات</button>
+            <div className="mb-5 rounded-3xl border border-white/10 bg-white/5 p-5">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-bold" dir="ltr">{selectedRepo.name}</h2>
+                  <p className="mt-1 text-sm text-slate-400">{selectedRepo.description || "لا يوجد وصف"}</p>
+                </div>
+                <a href={selectedRepo.html_url} target="_blank" rel="noreferrer" className="rounded-xl border border-white/10 px-4 py-2 text-sm text-indigo-300">فتح على GitHub ↗</a>
+              </div>
+            </div>
+
+            {repoLoading && <div className="mb-5 text-sm text-slate-400">جارٍ تحميل الملفات...</div>}
+
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="font-semibold">الملفات</h3>
+                  {path && <button onClick={() => openPath(path.split("/").slice(0, -1).join(""), "dir")} className="text-xs text-indigo-300">مجلد أعلى</button>}
+                </div>
+                <div className="space-y-1">
+                  {items.map((item) => (
+                    <button
+                      key={item.path}
+                      onClick={() => openPath(item.path, item.type)}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-sm hover:bg-white/10"
+                    >
+                      <span>{item.type === "dir" ? "📁" : "📄"}</span>
+                      <span className="truncate" dir="ltr">{item.name}</span>
+                    </button>
+                  ))}
+                  {!repoLoading && items.length === 0 && <p className="text-sm text-slate-500">المجلد فارغ.</p>}
+                </div>
+              </div>
+
+              <div className="min-w-0 rounded-2xl border border-white/10 bg-slate-950/60 p-4">
+                {file ? (
+                  <>
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <h3 className="truncate font-semibold" dir="ltr">{file.path}</h3>
+                      <a href={file.html_url || selectedRepo.html_url} target="_blank" rel="noreferrer" className="text-xs text-indigo-300">GitHub ↗</a>
+                    </div>
+                    <pre className="max-h-[70vh] overflow-auto rounded-xl bg-black/30 p-4 text-xs leading-6 text-slate-300" dir="ltr">
+                      <code>{decodeFile(file)}</code>
+                    </pre>
+                  </>
+                ) : (
+                  <div className="flex min-h-64 items-center justify-center text-center text-sm text-slate-500">
+                    اختر ملفًا لعرض محتواه هنا.
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        ) : (
+          <>
+            <section className="rounded-3xl border border-white/10 bg-white/5 p-5 sm:p-7">
+              <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+                <img src={user!.avatar_url} alt={user!.login} className="h-20 w-20 rounded-2xl border border-white/10" />
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-2xl font-bold">{user!.name || user!.login}</h2>
+                  <a href={user!.html_url} target="_blank" rel="noreferrer" className="text-sm text-indigo-300" dir="ltr">@{user!.login}</a>
+                  {user!.bio && <p className="mt-2 text-sm text-slate-300">{user!.bio}</p>}
+                </div>
+              </div>
+              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <StatCard label="المستودعات" value={repos.length} icon="📦" />
+                <StatCard label="النجوم" value={totalStars} icon="★" />
+                <StatCard label="الاشتقاقات" value={totalForks} icon="⑂" />
+                <StatCard label="المتابعون" value={user!.followers} icon="👥" />
+              </div>
+            </section>
+
+            <section className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-5">
+              <div className="flex flex-col gap-3 lg:flex-row">
+                <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث في المستودعات..." className="flex-1 rounded-xl border border-white/10 bg-slate-950/50 px-4 py-3 text-sm outline-none focus:border-indigo-400/60" />
+                <select value={language} onChange={(e) => setLanguage(e.target.value)} className="rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm">
+                  {languages.map((l) => <option key={l}>{l}</option>)}
+                </select>
+                <select value={sort} onChange={(e) => setSort(e.target.value)} className="rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm">
+                  <option value="updated">آخر تحديث</option>
+                  <option value="stars">النجوم</option>
+                  <option value="forks">الاشتقاقات</option>
+                  <option value="name">الاسم</option>
+                </select>
+              </div>
+            </section>
+
+            <section className="mt-6">
               <div className="mb-4 flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-slate-100">
-                  أبرز المستودعات
-                </h3>
-                <span className="text-xs text-slate-400">
-                  {repos.length} مستودع (بدون forks)
-                </span>
+                <h2 className="text-xl font-bold">كل المستودعات</h2>
+                <span className="text-xs text-slate-500">{filteredRepos.length} نتيجة</span>
               </div>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {repos.slice(0, 12).map((repo) => (
-                  <RepoCard key={repo.id} repo={repo} />
-                ))}
+                {filteredRepos.map((repo) => <RepoCard key={repo.id} repo={repo} onOpen={openRepo} />)}
               </div>
-              {repos.length === 0 && (
-                <p className="text-sm text-slate-400">
-                  لا توجد مستودعات عامة غير مشتقّة لعرضها.
-                </p>
-              )}
-            </div>
-          </div>
+              {filteredRepos.length === 0 && <p className="py-10 text-center text-sm text-slate-500">لا توجد نتائج.</p>}
+            </section>
+
+            <section className="mt-8 rounded-3xl border border-white/10 bg-white/5 p-5">
+              <h2 className="text-xl font-bold">النشاط الأخير</h2>
+              <div className="mt-4 space-y-2">
+                {activity.slice(0, 12).map((event) => (
+                  <div key={event.id} className="flex items-center justify-between gap-3 rounded-xl bg-white/5 px-4 py-3 text-sm">
+                    <span className="text-slate-300">{event.type.replace("Event", "")}</span>
+                    <span className="truncate text-slate-500" dir="ltr">{event.repo?.name || ""}</span>
+                    <span className="shrink-0 text-xs text-slate-600">{formatDate(event.created_at)}</span>
+                  </div>
+                ))}
+                {activity.length === 0 && <p className="text-sm text-slate-500">لا يوجد نشاط متاح.</p>}
+              </div>
+            </section>
+          </>
         )}
-      </div>
+      </main>
 
       <footer className="border-t border-white/5 py-6 text-center text-xs text-slate-500">
-        تم بناؤه باستخدام GitHub REST API العامة · React + Vite + Tailwind
+        يعمل مباشرة داخل المتصفح · GitHub REST API · لا يوجد خادم وسيط
       </footer>
     </div>
   );

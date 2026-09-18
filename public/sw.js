@@ -1,10 +1,8 @@
-const CACHE_NAME = "github-viewer-v1";
-const APP_SHELL = ["/", "/index.html", "/icon-512.png", "/manifest.webmanifest"];
+const CACHE_NAME = "github-viewer-v2";
+const APP_SHELL = ["/", "/index.html", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
-  );
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
   self.skipWaiting();
 });
 
@@ -20,7 +18,6 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return;
-
   const url = new URL(request.url);
 
   if (url.hostname === "api.github.com") {

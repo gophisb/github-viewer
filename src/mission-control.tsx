@@ -137,7 +137,7 @@ export default function MissionControl() {
       const meta = await gh<any>(`/repos/${match[1]}/${match[2]}`);
       const tree = await gh<any>(`/repos/${match[1]}/git/trees/${encodeURIComponent(meta.default_branch)}?recursive=1`);
       const result = analyze(value, meta.default_branch, tree), ev = buildEvidence(result);
-      setXray(result); setEvidence(ev); setCiStatus("NOT_CHECKED");
+      setXray(result); setEvidence(ev); setCiStatus("NOT_CHECKED"); try { localStorage.setItem("github-mission-control-runtime-target-v1", JSON.stringify({ repo: result.repo, branch: result.branch, sha: result.sha, gate: ev.some(e => e.status === "BLOCK") ? "BLOCK" : ev.some(e => e.status === "WARN") ? "WARN" : "PASS" })); } catch {}
       setAgentLog(prev => [...prev, `VERIFY → ${ev.filter(e => e.status === "PASS").length} PASS / ${ev.filter(e => e.status === "WARN").length} WARN / ${ev.filter(e => e.status === "BLOCK").length} BLOCK`]);
     } catch (e) { setMessage(e instanceof Error ? e.message : "فشل الفحص."); setAgentLog(prev => [...prev, "STOP THE LINE → فشل أداة القراءة؛ لم يتم تنفيذ أي كتابة."]); }
     finally { setBusy(false); }

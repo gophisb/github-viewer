@@ -1,4 +1,3 @@
-import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { readSession } from "./session";
 
 const SAFE_METHODS=new Set(["GET","HEAD"]);
@@ -13,10 +12,10 @@ const PUBLIC_ALLOWED=[
   /^\/users\/[A-Za-z0-9-]+\/repos(?:\?.*)?$/,
   /^\/users\/[A-Za-z0-9-]+\/events\/public(?:\?.*)?$/
 ];
-function cookies(req:VercelRequest){return Object.fromEntries((req.headers.cookie||"").split(";").map(x=>x.trim()).filter(Boolean).map(x=>{const i=x.indexOf("=");return[x.slice(0,i),decodeURIComponent(x.slice(i+1))]}));}
-function originOk(req:VercelRequest){const appUrl=process.env.APP_URL,origin=req.headers.origin;if(!appUrl||!origin)return false;try{return new URL(origin).origin===new URL(appUrl).origin}catch{return false}}
+function cookies(req:any){return Object.fromEntries((req.headers.cookie||"").split(";").map(x=>x.trim()).filter(Boolean).map(x=>{const i=x.indexOf("=");return[x.slice(0,i),decodeURIComponent(x.slice(i+1))]}));}
+function originOk(req:any){const appUrl=process.env.APP_URL,origin=req.headers.origin;if(!appUrl||!origin)return false;try{return new URL(origin).origin===new URL(appUrl).origin}catch{return false}}
 function allowed(path:string,list:any[]){return path.length<=600&&!path.includes("..")&&list.some(r=>r.test(path))}
-export default async function handler(req:VercelRequest,res:VercelResponse){
+export default async function handler(req:any,res:any){
   const method=(req.method||"GET").toUpperCase();
   if(method==="OPTIONS")return res.status(204).end();
   if(!["GET","HEAD","POST","PUT","PATCH"].includes(method))return res.status(405).json({error:"Method not allowed"});

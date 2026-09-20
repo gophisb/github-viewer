@@ -178,7 +178,7 @@ function ZipUploader({ repos, token: _token, onDone }: { repos: Repo[]; token?: 
       if (!entries.length) throw new Error("ملف ZIP لا يحتوي على ملفات.");
       const safeEntries = entries.map((entry: any) => {
         const raw = String(entry.name).replace(/\\/g, "/");
-        const clean = raw.replace(/^\\/+/, "");
+        const clean = raw.replace(/^\/+/, "/");
         if (!clean || clean.split("/").some((part: string) => part === "..")) throw new Error(`مسار غير آمن داخل ZIP: ${raw}`);
         return { entry, path: clean };
       });

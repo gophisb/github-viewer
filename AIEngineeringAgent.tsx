@@ -158,6 +158,7 @@ ${repoMap}
       pushLog(`ISOLATE: إنشاء فرع مستقل ${newBranch}`);
       await gh(`/repos/${repo.full_name}/git/refs`,token,{method:"POST",body:JSON.stringify({ref:`refs/heads/${newBranch}`,sha:baseSha})});
 
+      let prNumber:number|undefined;
       const upload=plan.actions?.find((a:any)=>a.type==="upload_zip");
       if(upload){
         if(!zip)throw new Error("الخطة تطلب ZIP لكن الملف غير موجود.");
@@ -180,13 +181,16 @@ ${repoMap}
         await gh(`/repos/${repo.full_name}/git/refs/heads/${newBranch}`,token,{method:"PATCH",body:JSON.stringify({sha:c.sha,force:false})});
         pushLog("VERIFY: التحقق من رأس الفرع...");
         await gh(`/repos/${repo.full_name}/git/ref/heads/${newBranch}`,token);
-        pushLog("CI: انتظار الفحوص على commit الفرع...");
+        pushLog("CHECKPOINT: إنشاء PR أولًا حتى تُشغّل GitHub Actions الفحوص على الفرع.");
+        const uploadPR=await gh<any>(`/repos/${repo.full_name}/pulls`,token,{method:"POST",body:JSON.stringify({title:`AI Agent: ${command.slice(0,72)}`,head:newBranch,base:repo.default_branch,draft:true,body:`طلب المستخدم:\n${command}\n\nالخطة:\n${JSON.stringify(plan,null,2)}\n\n> PR تجريبي/مراجعة؛ الفرع الأساسي لم يُمس. لا دمج تلقائي.`})});
+        prNumber=uploadPR.number;
+        pushLog("CI: انتظار الفحوص بعد إنشاء PR...");
         const uploadCompare=await gh<any>(`/repos/${repo.full_name}/compare/${encodeURIComponent(repo.default_branch)}...${encodeURIComponent(newBranch)}`,token);
         const uploadHeadSha=uploadCompare.head?.sha||c.sha;
         const uploadCI=await waitForCI(repo.full_name,uploadHeadSha,token,10);
         const uploadCIText=uploadCI.checks.map((x:any)=>`${x.name}: ${x.status}/${x.conclusion||"pending"}`).join("\n")||"لا توجد فحوص مسجلة.";
-        const uploadPR=await gh<any>(`/repos/${repo.full_name}/pulls`,token,{method:"POST",body:JSON.stringify({title:`AI Agent: ${command.slice(0,72)}`,head:newBranch,base:repo.default_branch,body:`طلب المستخدم:\n${command}\n\nالخطة:\n${JSON.stringify(plan,null,2)}\n\nCI:\n${uploadCIText}\n\n> الفرع الأساسي لم يُمس. لا دمج تلقائي.`})});
-        setResult(`تم رفع ZIP على فرع ${newBranch} وإنشاء Pull Request #${uploadPR.number}.\nCI: ${uploadCIText}`);
+        await gh<any>(`/repos/${repo.full_name}/pulls/${prNumber}`,token,{method:"PATCH",body:JSON.stringify({body:`طلب المستخدم:\n${command}\n\nالخطة:\n${JSON.stringify(plan,null,2)}\n\nCI:\n${uploadCIText}\n\n> الفرع الأساسي لم يُمس. لا دمج تلقائي.`})});
+        setResult(`تم رفع ZIP على فرع ${newBranch} وإنشاء Pull Request #${prNumber}.\nCI: ${uploadCIText}`);
         if(uploadCI.failed)pushLog("CI: فشل؛ SAFE-STOP. لا إصلاح تلقائي للـZIP.");
         else pushLog("CHECKPOINT: PR جاهز للمراجعة.");
         onDone();return;
@@ -261,6 +265,9 @@ ${wantsModify?`أعد JSON فقط:
       const stats=(compare.files||[]).map((f:any)=>`${f.filename}: +${f.additions||0} / -${f.deletions||0}`).join("\n");
       pushLog(`DIFF: ${changedPaths.length} ملفات؛ ${compare.total_commits||0} commits`);
 
+      pushLog("CHECKPOINT: إنشاء PR أولًا حتى تُشغّل GitHub Actions الفحوص.");
+      const initialPR=await gh<any>(`/repos/${repo.full_name}/pulls`,token,{method:"POST",body:JSON.stringify({title:`AI Agent: ${command.slice(0,72)}`,head:newBranch,base:repo.default_branch,draft:true,body:`## AI Engineering Agent\n\n**الطلب:**\n${command}\n\n**الخطة الأولية:**\n${decision.summary||plan.summary||"—"}\n\n> الوكيل ينتظر نتائج CI قبل اعتماد الحالة النهائية. لا دمج تلقائي.`})});
+      prNumber=initialPR.number;
       let ci="لم يتم العثور على فحوص CI مرتبطة بعد.";
       let ciReport:any=null;
       const headSha=compare.head?.sha||"";
@@ -314,8 +321,9 @@ ${repairContext}
       const finalStats=(finalCompare.files||[]).map((f:any)=>`${f.filename}: +${f.additions||0} / -${f.deletions||0}`).join("\n");
       const repairText=repairHistory.length?repairHistory.join("\n"):"لم تُستخدم دورة إصلاح.";
       const finalStatus=ciReport?.failed?"CI ما زال فاشلًا بعد الحد الأقصى؛ SAFE-STOP.":(ciReport?.pending?"CI ما زال قيد التشغيل؛ المراجعة اليدوية مطلوبة.":"CI مكتمل دون فشل معروف.");
-      const pr=await gh<any>(`/repos/${repo.full_name}/pulls`,token,{method:"POST",body:JSON.stringify({title:`AI Agent: ${command.slice(0,72)}`,head:newBranch,base:repo.default_branch,body:`## AI Engineering Agent\n\n**الطلب:**\n${command}\n\n**الخطة:**\n${decision.summary||plan.summary||"—"}\n\n**الملفات:**\n${[...new Set(changedForRepair)].map((x:string)=>`- ${x}`).join("\n")}\n\n**Diff:**\n${finalStats||"—"}\n\n**CI:**\n${ci}\n\n**الحالة:**\n${finalStatus}\n\n**الإصلاحات:**\n${repairText}\n\n> لم يتم تعديل الفرع الأساسي. لا يوجد دمج تلقائي؛ القرار البشري مطلوب.`})});
-      setResult(`اكتمل التنفيذ على ${newBranch}. PR #${pr.number}.\n${finalStatus}\n\n${finalStats||"لا توجد إحصاءات diff."}`);
+      if(!prNumber)throw new Error("تعذر تحديد رقم الـPR.");
+      await gh<any>(`/repos/${repo.full_name}/pulls/${prNumber}`,token,{method:"PATCH",body:JSON.stringify({body:`## AI Engineering Agent\n\n**الطلب:**\n${command}\n\n**الخطة:**\n${decision.summary||plan.summary||"—"}\n\n**الملفات:**\n${[...new Set(changedForRepair)].map((x:string)=>`- ${x}`).join("\n")}\n\n**Diff:**\n${finalStats||"—"}\n\n**CI:**\n${ci}\n\n**الحالة:**\n${finalStatus}\n\n**الإصلاحات:**\n${repairText}\n\n> لم يتم تعديل الفرع الأساسي. لا يوجد دمج تلقائي؛ القرار البشري مطلوب.`})});
+      setResult(`اكتمل التنفيذ على ${newBranch}. PR #${prNumber}.\n${finalStatus}\n\n${finalStats||"لا توجد إحصاءات diff."}`);
       if(ciReport?.failed)pushLog("SAFE-STOP: CI ما زال فاشلًا؛ لم يتم الدمج.");
       else pushLog("CHECKPOINT: التنفيذ والتحقق وCI اكتملوا؛ الـPR ينتظر المراجعة البشرية.");
       onDone();

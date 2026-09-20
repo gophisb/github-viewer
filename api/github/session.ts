@@ -1,4 +1,3 @@
-import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 const SESSION_COOKIE = "github_session";
 const CSRF_COOKIE = "github_csrf";
@@ -9,7 +8,7 @@ function b64url(bytes: Uint8Array) {
 function fromB64url(s: string) {
   return Uint8Array.from(Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - s.length % 4) % 4), "base64"));
 }
-function parseCookies(req: VercelRequest) {
+function parseCookies(req: any) {
   return Object.fromEntries((req.headers.cookie || "").split(";").map(x => x.trim()).filter(Boolean).map(x => {
     const i=x.indexOf("="); return [x.slice(0,i), decodeURIComponent(x.slice(i+1))];
   }));
@@ -34,14 +33,14 @@ export async function unseal(value: string) {
   const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:fromB64url(ivPart)},k,fromB64url(dataPart));
   return JSON.parse(new TextDecoder().decode(plain));
 }
-export function clearCookies(res: VercelResponse) {
+export function clearCookies(res: any) {
   res.setHeader("Set-Cookie", [
     `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`,
     `${CSRF_COOKIE}=; Secure; SameSite=Lax; Path=/; Max-Age=0`,
     `github_oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`
   ]);
 }
-export async function readSession(req: VercelRequest) {
+export async function readSession(req: any) {
   const c=parseCookies(req), raw=c[SESSION_COOKIE];
   if(!raw) return null;
   try {
@@ -50,7 +49,7 @@ export async function readSession(req: VercelRequest) {
     return s;
   } catch { return null; }
 }
-export default async function handler(req: VercelRequest,res: VercelResponse) {
+export default async function handler(req: any,res: any) {
   if(req.method!=="GET") return res.status(405).json({error:"Method not allowed"});
   const s=await readSession(req);
   if(!s) return res.status(200).json({authenticated:false});

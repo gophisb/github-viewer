@@ -121,7 +121,7 @@ export default function AIEngineeringAgent({repos,token,onDone}:{repos:RepoLite[
       const repoPaths=(tree.tree||[]).filter((x:any)=>x.type==="blob"&&typeof x.path==="string").slice(0,1800).map((x:any)=>x.path);
       const anchorNames=["README.md","AGENTS.md","ARCHITECTURE.md","package.json","tsconfig.json","vite.config.ts","vite.config.js","next.config.js","requirements.txt","pyproject.toml","Cargo.toml","AndroidManifest.xml"];
       const anchors=anchorNames.filter((p:string)=>repoPaths.includes(p));
-      const sourceAreas=repoPaths.filter((p:string)=>/^(src|app|lib|components|android|ios)\\//.test(p)&&/\\.(ts|tsx|js|jsx|py|kt|java|rs)$/.test(p)).slice(0,80);
+      const sourceAreas=repoPaths.filter((p:string)=>/^(src|app|lib|components|android|ios)\//.test(p)&&/\.(ts|tsx|js|jsx|py|kt|java|rs)$/.test(p)).slice(0,80);
       let anchorContext="";
       for(const p of anchors.slice(0,8)){try{const f=await gh<any>(fileRef(repo.full_name,p,repo.default_branch),token);anchorContext+=`\\n===== ARCHITECTURE ANCHOR: ${p} =====\\n${decodeContent(f.content||"").slice(0,12000)}\\n===== END ANCHOR =====\\n`;}catch{}}
       const repoMap="\\nREPOSITORY FILE MAP:\\n"+repoPaths.join("\\n")+"\\n\\nARCHITECTURE ANCHORS:\\n"+anchors.join("\\n")+"\\n\\nLIKELY SOURCE AREAS:\\n"+sourceAreas.join("\\n")+anchorContext;

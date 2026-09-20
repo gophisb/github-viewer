@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
+declare global { interface Window { JSZip: any } }
+
 type GitHubUser = {
   login: string;
   name: string | null;
@@ -89,8 +91,9 @@ function getStoredToken() {
   }
 }
 
-async function githubFetch<T>(path: string, token = getStoredToken()): Promise<T> {
+async function githubFetch<T>(path: string, token = getStoredToken(), init: RequestInit = {}): Promise<T> {
   const response = await fetch(path.startsWith("http") ? path : API + path, {
+    ...init,
     headers: {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": API_VERSION,
@@ -177,6 +180,75 @@ function RepoCard({ repo, onOpen }: { repo: Repo; onOpen: (repo: Repo) => void }
         <span>{formatDate(repo.updated_at)}</span>
       </div>
     </button>
+  );
+}
+
+
+function ZipUploader({ repos, token, onDone }: { repos: Repo[]; token: string; onDone: () => void }) {
+  const [repoName, setRepoName] = useState(repos[0]?.full_name || "");
+  const [folder, setFolder] = useState("");
+  const [zipFile, setZipFile] = useState<File | null>(null);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [current, setCurrent] = useState("");
+  const [status, setStatus] = useState("");
+  const [result, setResult] = useState("");
+  useEffect(() => { if (!repoName && repos[0]) setRepoName(repos[0].full_name); }, [repos, repoName]);
+
+  const upload = async () => {
+    if (!zipFile || !repoName || running) return;
+    setRunning(true); setProgress(0); setResult(""); setStatus("قراءة ملف ZIP...");
+    try {
+      if (!window.JSZip) throw new Error("محرك ZIP لم يُحمّل بعد. أعد تحميل الصفحة.");
+      const zip = await window.JSZip.loadAsync(zipFile);
+      const entries = Object.values(zip.files).filter((entry: any) => !entry.dir) as any[];
+      if (!entries.length) throw new Error("ملف ZIP لا يحتوي على ملفات.");
+      const safeEntries = entries.map((entry: any) => {
+        const raw = String(entry.name).replace(/\\/g, "/");
+        const clean = raw.replace(/^\/+/, "");
+        if (!clean || clean.split("/").some((part: string) => part === "..")) throw new Error(`مسار غير آمن داخل ZIP: ${raw}`);
+        return { entry, path: clean };
+      });
+      const repo = repos.find((r) => r.full_name === repoName);
+      if (!repo) throw new Error("المستودع المحدد غير موجود.");
+      const ref = await githubFetch<any>(`/repos/${repo.full_name}/git/ref/heads/${encodeURIComponent(repo.default_branch)}`, token);
+      const parentSha = ref.object.sha;
+      const parentCommit = await githubFetch<any>(`/repos/${repo.full_name}/git/commits/${parentSha}`, token);
+      const treeElements: any[] = [];
+      for (let i = 0; i < safeEntries.length; i++) {
+        const { entry, path } = safeEntries[i];
+        const cleanFolder = folder.trim().replace(/^\/+|\/+$/g, "");
+        const targetPath = [cleanFolder, path].filter(Boolean).join("/");
+        setCurrent(path); setStatus(`رفع ${i + 1} من ${safeEntries.length}`);
+        const base64 = await entry.async("base64");
+        const blob = await githubFetch<any>(`/repos/${repo.full_name}/git/blobs`, token, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: base64, encoding: "base64" }) });
+        treeElements.push({ path: targetPath, mode: "100644", type: "blob", sha: blob.sha });
+        setProgress(Math.round(((i + 1) / safeEntries.length) * 90));
+      }
+      setStatus("إنشاء شجرة الملفات...");
+      const tree = await githubFetch<any>(`/repos/${repo.full_name}/git/trees`, token, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ base_tree: parentCommit.tree.sha, tree: treeElements }) });
+      setStatus("إنشاء commit واحد...");
+      const commit = await githubFetch<any>(`/repos/${repo.full_name}/git/commits`, token, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: `Upload ZIP: ${zipFile.name}`, tree: tree.sha, parents: [parentSha] }) });
+      setStatus("تحديث الفرع...");
+      await githubFetch<any>(`/repos/${repo.full_name}/git/refs/heads/${encodeURIComponent(repo.default_branch)}`, token, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sha: commit.sha, force: false }) });
+      setProgress(100); setStatus("اكتمل الرفع"); setResult(`تم رفع ${safeEntries.length} ملفًا في commit واحد إلى ${repo.full_name}.`); onDone();
+    } catch (e) { setResult(e instanceof Error ? e.message : "فشل رفع ZIP."); setStatus("توقف الرفع"); }
+    finally { setRunning(false); }
+  };
+
+  return (
+    <section className="mt-6 rounded-3xl border border-indigo-400/20 bg-indigo-500/5 p-5 sm:p-6">
+      <div className="flex items-start gap-3"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-500/20 text-xl">📦</div><div><h2 className="text-xl font-bold">رفع مشروع ZIP إلى GitHub</h2><p className="mt-1 text-sm text-slate-400">يفك ZIP داخل المتصفح ثم يرفع الملفات مباشرة إلى GitHub بدون خادم وسيط.</p></div></div>
+      <div className="mt-5 grid gap-3 md:grid-cols-3">
+        <select value={repoName} onChange={(e) => setRepoName(e.target.value)} disabled={running} className="rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm" dir="ltr">{repos.map((r) => <option key={r.id} value={r.full_name}>{r.full_name}</option>)}</select>
+        <input value={folder} onChange={(e) => setFolder(e.target.value)} disabled={running} placeholder="مجلد داخل المستودع (اختياري)" className="rounded-xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-white outline-none focus:border-indigo-400/60" dir="ltr" />
+        <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-white/20 bg-white/5 px-4 py-3 text-sm text-slate-300 hover:bg-white/10"><input type="file" accept=".zip,application/zip" disabled={running} onChange={(e) => setZipFile(e.target.files?.[0] || null)} className="hidden" />{zipFile ? `📄 ${zipFile.name}` : "اختيار ملف ZIP"}</label>
+      </div>
+      <button onClick={upload} disabled={!zipFile || !repoName || running} className="mt-3 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-5 py-3 font-semibold text-white disabled:opacity-40">{running ? "جارٍ الرفع..." : "رفع ZIP إلى GitHub"}</button>
+      {(running || status) && <div className="mt-4"><div className="mb-2 flex justify-between text-xs text-slate-400"><span>{status}</span><span>{progress}%</span></div><div className="h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-indigo-500 transition-all" style={{ width: `${progress}%` }} /></div>{current && <p className="mt-2 truncate text-xs text-slate-500" dir="ltr">{current}</p>}</div>}
+      {result && <div className={result.startsWith("تم رفع") ? "mt-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300" : "mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300"}>{result}</div>}
+      <p className="mt-3 text-xs text-slate-500">الأفضل استخدام رمز GitHub بصلاحية Contents: Read and write. ملف ZIP لا يُرسل إلى خادم وسيط.</p>
+    </section>
   );
 }
 
@@ -584,6 +656,7 @@ export default function App() {
               </div>
             </section>
 
+            <ZipUploader repos={repos} token={token} onDone={() => { fetchAllRepos(token).then(setRepos).catch(() => {}); }} />
             <section className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-5">
               <div className="flex flex-col gap-3 lg:flex-row">
                 <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث في المستودعات..." className="flex-1 rounded-xl border border-white/10 bg-slate-950/50 px-4 py-3 text-sm outline-none focus:border-indigo-400/60" />

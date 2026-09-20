@@ -5,8 +5,6 @@ declare global { interface Window { JSZip:any } }
 
 const API="https://api.github.com";
 const API_VERSION="2022-11-28";
-const AI_KEY="github-viewer-openai-key";
-const AI_MODEL_KEY="github-viewer-openai-model";
 const MAX_FILES=8;
 const MAX_FILE_CHARS=70000;
 const MAX_TOTAL_CHARS=260000;
@@ -25,16 +23,13 @@ async function gh<T>(path:string, token:string, init:RequestInit={}):Promise<T>{
   return r.status===204?({} as T):r.json();
 }
 
-async function ai(apiKey:string,model:string,input:string){
-  const r=await fetch("https://api.openai.com/v1/responses",{
-    method:"POST",
-    headers:{"Content-Type":"application/json",Authorization:`Bearer ${apiKey}`},
-    body:JSON.stringify({model,input,max_output_tokens:14000})
-  });
-  if(!r.ok) throw new Error((await r.text())||`OpenAI API ${r.status}`);
-  const d=await r.json();
-  if(typeof d.output_text==="string") return d.output_text;
-  return (d.output||[]).flatMap((x:any)=>x.content||[]).map((x:any)=>x.text||"").join("\n");
+async function ai(model:string,input:string){
+  const r=await fetch("/api/ai",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model,input})});
+  const raw=await r.text();
+  if(!r.ok) throw new Error(raw||`AI backend ${r.status}`);
+  const d=JSON.parse(raw);
+  if(typeof d.output_text!=="string") throw new Error("الخادم لم يُرجع نص الذكاء الاصطناعي.");
+  return d.output_text;
 }
 
 function jsonFrom(text:string){
@@ -91,8 +86,7 @@ function fileRef(repo:string,path:string,ref:string){
 }
 
 export default function AIEngineeringAgent({repos,token,onDone}:{repos:RepoLite[];token:string;onDone:()=>void}){
-  const [apiKey,setApiKey]=useState(()=>localStorage.getItem(AI_KEY)||"");
-  const [model,setModel]=useState(()=>localStorage.getItem(AI_MODEL_KEY)||"gpt-5.6-luna");
+  const [model,setModel]=useState("gpt-5.6-luna");
   const [repoName,setRepoName]=useState(repos[0]?.full_name||"");
   const [zip,setZip]=useState<File|null>(null);
   const [command,setCommand]=useState("");
@@ -110,11 +104,10 @@ export default function AIEngineeringAgent({repos,token,onDone}:{repos:RepoLite[
   const pushLog=(s:string)=>setLog(x=>[...x,s]);
 
   const analyze=async()=>{
-    if(!apiKey.trim()||!command.trim()||!repoName||running)return;
+    if(!command.trim()||!repoName||running)return;
     const repo=repos.find(r=>r.full_name===repoName);
     if(!repo)return;
     setRunning(true);setResult("");setPlan(null);setApproved(false);setLog(["ASSESS: فهم الطلب وتحديد حدود التنفيذ..."]);
-    localStorage.setItem(AI_KEY,apiKey.trim());localStorage.setItem(AI_MODEL_KEY,model.trim());
     try{
       let zipInfo=manifest;
       const tree=await gh<any>(`/repos/${repo.full_name}/git/trees/${encodeURIComponent(repo.default_branch)}?recursive=1`,token);
@@ -146,7 +139,7 @@ ${repoMap}
 - إذا لم يوجد ZIP فلا تستخدم upload_zip.
 - لا تفترض أسماء ملفات غير منطقية؛ اختر مسارات مرجحة فقط.`;
       pushLog("PLAN: بناء خطة منظمة...");
-      setPlan(jsonFrom(await ai(apiKey.trim(),model.trim(),prompt)));
+      setPlan(jsonFrom(await ai(model.trim(),prompt)));
       pushLog("PLAN: اكتملت الخطة؛ التنفيذ متوقف حتى موافقة المستخدم.");
     }catch(e){setResult(e instanceof Error?e.message:"فشل التحليل.");}
     finally{setRunning(false)}
@@ -233,7 +226,7 @@ ${wantsModify?`أعد JSON فقط:
 {"summary":"...","findings":[{"path":"...","finding":"...","severity":"low|medium|high"}],"verification":["..."]}
 لا تقترح تعديلات.`}`;
       pushLog("REVIEW: إرسال الملفات المقروءة للتحليل الهندسي...");
-      const decision=jsonFrom(await ai(apiKey.trim(),model.trim(),second));
+      const decision=jsonFrom(await ai(model.trim(),second));
 
       if(!wantsModify){
         setResult(JSON.stringify(decision,null,2));pushLog("VERIFY: اكتمل الفحص؛ لم تُجر أي تغييرات.");return;
@@ -300,7 +293,7 @@ ${repairContext}
 - المحتوى كامل الملف.
 - إذا لم يمكن إصلاح المشكلة بأمان: changes: [].
 - لا تغيّر بنية المشروع بلا ضرورة.`;
-        const repair=jsonFrom(await ai(apiKey.trim(),model.trim(),repairPrompt)); repairHistory.push(`الدورة ${cycle}: ${repair.summary||"—"}`);
+        const repair=jsonFrom(await ai(model.trim(),repairPrompt)); repairHistory.push(`الدورة ${cycle}: ${repair.summary||"—"}`);
         const repairChanges=Array.isArray(repair.changes)?repair.changes:[];
         if(!repairChanges.length){ pushLog("REPAIR: لا يوجد إصلاح آمن؛ SAFE-STOP."); break; }
         if(repairChanges.length>MAX_FILES)throw new Error("الإصلاح تجاوز الحد المسموح.");
@@ -336,7 +329,6 @@ ${repairContext}
       <div><h2 className="text-xl font-bold">AI Engineering Agent</h2><p className="mt-1 text-sm text-slate-400">ASSESS → PLAN → READ → MODIFY → VERIFY → DIFF → PR. الفرع الأساسي محمي.</p></div>
     </div>
     <div className="mt-5 grid gap-3 md:grid-cols-4">
-      <input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="OpenAI API Key" className="rounded-xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-white" dir="ltr"/>
       <input value={model} onChange={e=>setModel(e.target.value)} placeholder="gpt-5.6-luna" className="rounded-xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-white" dir="ltr"/>
       <select value={repoName} onChange={e=>setRepoName(e.target.value)} className="rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm" dir="ltr">{repos.map(r=><option key={r.id} value={r.full_name}>{r.full_name}</option>)}</select>
       <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-white/20 bg-white/5 px-4 py-3 text-sm text-slate-300"><input type="file" accept=".zip,application/zip" onChange={e=>setZip(e.target.files?.[0]||null)} className="hidden"/>{zip?`📦 ${zip.name}`:"اختيار ZIP من الهاتف"}</label>
@@ -344,7 +336,7 @@ ${repairContext}
     <textarea value={command} onChange={e=>setCommand(e.target.value)} placeholder="مثال: افحص houd11، أصلح مشكلة الأذان، اقرأ الملفات المرتبطة فقط ثم نفّذ الإصلاح على فرع مستقل وأنشئ PR." className="mt-3 min-h-28 w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-white"/>
     {manifest&&<div className="mt-2 text-xs text-slate-500" dir="ltr">{manifest}</div>}
     <div className="mt-3 flex flex-wrap gap-3">
-      <button onClick={analyze} disabled={!apiKey.trim()||!command.trim()||!repoName||running} className="rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-600 px-5 py-3 font-semibold text-white disabled:opacity-40">{running?"جارٍ العمل...":"1) تحليل وبناء الخطة"}</button>
+      <button onClick={analyze} disabled={!command.trim()||!repoName||running} className="rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-600 px-5 py-3 font-semibold text-white disabled:opacity-40">{running?"جارٍ العمل...":"1) تحليل وبناء الخطة"}</button>
       {plan&&<button onClick={()=>setApproved(!approved)} disabled={running} className={`rounded-xl border px-5 py-3 font-semibold ${approved?"border-emerald-400 bg-emerald-500/20 text-emerald-300":"border-amber-400/40 bg-amber-500/10 text-amber-200"}`}>{approved?"✓ تمت الموافقة":"2) أوافق على التنفيذ"}</button>}
       {plan&&<button onClick={execute} disabled={!approved||running} className="rounded-xl bg-gradient-to-r from-fuchsia-500 to-indigo-600 px-5 py-3 font-semibold text-white disabled:opacity-30">{running?"جارٍ التنفيذ...":"3) تنفيذ الخطة"}</button>}
     </div>
@@ -356,6 +348,6 @@ ${repairContext}
     </div>}
     {log.length>0&&<div className="mt-4 max-h-48 overflow-auto rounded-xl bg-black/20 p-3 text-xs text-slate-400">{log.map((x,i)=><div key={i}>{x}</div>)}</div>}
     {result&&<pre className={`mt-4 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl border p-3 text-sm ${result.startsWith("تم")||result.includes("اكتمل")?"border-emerald-500/30 bg-emerald-500/10 text-emerald-300":"border-red-500/30 bg-red-500/10 text-red-300"}`}>{result}</pre>}
-    <p className="mt-3 text-xs text-amber-300/80">هذه نسخة تجريبية: مفتاح OpenAI يبقى في المتصفح. الوكيل لا يحصل على مفتاح GitHub داخل النموذج؛ لكنه يستخدمه لتنفيذ عمليات GitHub من المتصفح. لا تمنحه صلاحيات أوسع من المطلوب.</p>
+    <p className="mt-3 text-xs text-emerald-300/80">مفتاح OpenAI لا يظهر في المتصفح: الواجهة تستدعي /api/ai، ويجب ضبط OPENAI_API_KEY وOPENAI_ALLOWED_MODELS في Vercel. الوكيل لا يرسل مفتاح GitHub إلى النموذج، ويعمل على فرع مستقل ولا يدمج تلقائيًا.</p>
   </section>;
 }

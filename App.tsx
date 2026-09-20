@@ -658,8 +658,14 @@ export default function App() {
               </div>
             </section>
 
+            <section id="ai-engineering-agent" className="mt-6 rounded-3xl border-2 border-fuchsia-400/40 bg-fuchsia-500/10 p-5 shadow-lg shadow-fuchsia-950/20 sm:p-7">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div><h2 className="text-2xl font-extrabold text-white">🤖 الذكاء الاصطناعي الهندسي</h2><p className="mt-1 text-sm text-fuchsia-200/80">اكتب طلبك هنا، وسيعمل الوكيل على المستودع وفق المسار: ASSESS → PLAN → READ → MODIFY → VERIFY → DIFF → PR.</p></div>
+                <span className="shrink-0 rounded-full border border-fuchsia-300/30 bg-fuchsia-400/10 px-3 py-1 text-xs text-fuchsia-200">AI AGENT</span>
+              </div>
+              <AIEngineeringAgent repos={repos} token={token} onDone={() => { fetchAllRepos(token).then(setRepos).catch(() => {}); }} />
+            </section>
             <ZipUploader repos={repos} token={token} onDone={() => { fetchAllRepos(token).then(setRepos).catch(() => {}); }} />
-            <AIEngineeringAgent repos={repos} token={token} onDone={() => { fetchAllRepos(token).then(setRepos).catch(() => {}); }} />
             <section className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-5">
               <div className="flex flex-col gap-3 lg:flex-row">
                 <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث في المستودعات..." className="flex-1 rounded-xl border border-white/10 bg-slate-950/50 px-4 py-3 text-sm outline-none focus:border-indigo-400/60" />

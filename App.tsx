@@ -551,7 +551,18 @@ export default function App() {
     setCanInstall(false);
   };
 
-  if (!user && !loading) {
+  if (!user) {
+    if (loading) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(125%_125%_at_50%_0%,#1e1b4b_0%,#0f172a_50%,#020617_100%)] px-4 text-slate-100">
+          <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 p-6 text-center shadow-2xl">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-500/20 text-2xl">⏳</div>
+            <h2 className="mt-4 text-xl font-bold">جارٍ الاتصال بـ GitHub</h2>
+            <p className="mt-2 text-sm text-slate-400">يتم التحقق من الرمز وتحميل المستودعات. لن تختفي الواجهة أثناء الانتظار.</p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="min-h-screen bg-[radial-gradient(125%_125%_at_50%_0%,#1e1b4b_0%,#0f172a_50%,#020617_100%)] text-slate-100">
         <ConnectionScreen onConnect={connect} onPublic={loadPublic} error={error} />
@@ -658,8 +669,14 @@ export default function App() {
               </div>
             </section>
 
+            <section id="ai-engineering-agent" className="mt-6 rounded-3xl border-2 border-fuchsia-400/40 bg-fuchsia-500/10 p-5 shadow-lg shadow-fuchsia-950/20 sm:p-7">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div><h2 className="text-2xl font-extrabold text-white">🤖 الذكاء الاصطناعي الهندسي</h2><p className="mt-1 text-sm text-fuchsia-200/80">اكتب طلبك هنا، وسيعمل الوكيل على المستودع وفق المسار: ASSESS → PLAN → READ → MODIFY → VERIFY → DIFF → PR.</p></div>
+                <span className="shrink-0 rounded-full border border-fuchsia-300/30 bg-fuchsia-400/10 px-3 py-1 text-xs text-fuchsia-200">AI AGENT</span>
+              </div>
+              <AIEngineeringAgent repos={repos} token={token} onDone={() => { fetchAllRepos(token).then(setRepos).catch(() => {}); }} />
+            </section>
             <ZipUploader repos={repos} token={token} onDone={() => { fetchAllRepos(token).then(setRepos).catch(() => {}); }} />
-            <AIEngineeringAgent repos={repos} token={token} onDone={() => { fetchAllRepos(token).then(setRepos).catch(() => {}); }} />
             <section className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-5">
               <div className="flex flex-col gap-3 lg:flex-row">
                 <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث في المستودعات..." className="flex-1 rounded-xl border border-white/10 bg-slate-950/50 px-4 py-3 text-sm outline-none focus:border-indigo-400/60" />

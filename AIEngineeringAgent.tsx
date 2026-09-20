@@ -101,6 +101,8 @@ export default function AIEngineeringAgent({repos,token,onDone}:{repos:RepoLite[
   const [result,setResult]=useState("");
   const [branch,setBranch]=useState("");
   const [history,setHistory]=useState<any[]>([]);
+  const [chat,setChat]=useState<{role:"user"|"ai";text:string}[]>([]);
+  const [chatRunning,setChatRunning]=useState(false);
 
   useEffect(()=>{if(!repoName&&repos[0])setRepoName(repos[0].full_name)},[repos,repoName]);
   useEffect(()=>{if(repoName)setHistory(loadMemory(repoName))},[repoName]);
@@ -109,6 +111,17 @@ export default function AIEngineeringAgent({repos,token,onDone}:{repos:RepoLite[
 
   const pushLog=(s:string)=>setLog(x=>[...x,s]);
   const remember=(entry:any)=>{if(!repoName)return;saveMemory(repoName,{time:new Date().toISOString(),...entry});setHistory(loadMemory(repoName))};
+
+  const askAgent=async()=>{
+    const question=command.trim();
+    if(!question||chatRunning||running)return;
+    setChatRunning(true);setChat(x=>[...x,{role:"user",text:question}]);
+    try{
+      const answer=await ai(model.trim(),`أنت مساعد هندسي داخل GitHub Viewer. أجب بالعربية وبوضوح. لا تنفذ أي تعديل في هذا الوضع؛ هذه محادثة واستشارة فقط. سؤال المستخدم: ${question}`);
+      setChat(x=>[...x,{role:"ai",text:answer}]);
+    }catch(e){setChat(x=>[...x,{role:"ai",text:e instanceof Error?e.message:"فشل الاتصال بالذكاء الاصطناعي."}]);}
+    finally{setChatRunning(false)}
+  };
 
   const analyze=async()=>{
     if(!command.trim()||!repoName||running)return;
@@ -358,10 +371,22 @@ ${repairContext}
       <select value={repoName} onChange={e=>setRepoName(e.target.value)} className="rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm" dir="ltr">{repos.map(r=><option key={r.id} value={r.full_name}>{r.full_name}</option>)}</select>
       <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-white/20 bg-white/5 px-4 py-3 text-sm text-slate-300"><input type="file" accept=".zip,application/zip" onChange={e=>setZip(e.target.files?.[0]||null)} className="hidden"/>{zip?`📦 ${zip.name}`:"اختيار ZIP من الهاتف"}</label>
     </div>
-    <textarea value={command} onChange={e=>setCommand(e.target.value)} placeholder="مثال: افحص houd11، أصلح مشكلة الأذان، اقرأ الملفات المرتبطة فقط ثم نفّذ الإصلاح على فرع مستقل وأنشئ PR." className="mt-3 min-h-28 w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-white"/>
+    <div className="mt-4 rounded-2xl border border-fuchsia-400/20 bg-fuchsia-500/5 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div><div className="font-bold text-white">💬 تحدث مع الوكيل</div><div className="text-xs text-slate-400">هذا الوضع للمحادثة فقط؛ لا يعدّل GitHub.</div></div>
+        <span className="rounded-full bg-fuchsia-500/15 px-3 py-1 text-xs text-fuchsia-300">AI CHAT</span>
+      </div>
+      {chat.length>0&&<div className="mb-3 max-h-64 space-y-2 overflow-auto rounded-xl bg-black/20 p-3">
+        {chat.map((m,i)=><div key={i} className={m.role==="user"?"text-right":"text-left"}><span className={m.role==="user"?"inline-block max-w-[90%] rounded-xl bg-fuchsia-500/15 px-3 py-2 text-sm text-fuchsia-100":"inline-block max-w-[90%] rounded-xl bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100"}>{m.text}</span></div>)}
+      </div>}
+      <textarea value={command} onChange={e=>setCommand(e.target.value)} placeholder="اكتب هنا وتحدث مع الوكيل، مثال: ما بنية هذا المشروع؟" className="min-h-24 w-full rounded-xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-white"/>
+      <div className="mt-3 flex flex-wrap gap-3">
+        <button onClick={askAgent} disabled={!command.trim()||chatRunning||running} className="rounded-xl bg-fuchsia-600 px-5 py-3 font-semibold text-white disabled:opacity-40">{chatRunning?"يفكر...":"💬 إرسال إلى الذكاء الاصطناعي"}</button>
+        <button onClick={analyze} disabled={!command.trim()||!repoName||running||chatRunning} className="rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-600 px-5 py-3 font-semibold text-white disabled:opacity-40">{running?"جارٍ العمل...":"1) تحليل وبناء الخطة الهندسية"}</button>
+      </div>
+    </div>
     {manifest&&<div className="mt-2 text-xs text-slate-500" dir="ltr">{manifest}</div>}
     <div className="mt-3 flex flex-wrap gap-3">
-      <button onClick={analyze} disabled={!command.trim()||!repoName||running} className="rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-600 px-5 py-3 font-semibold text-white disabled:opacity-40">{running?"جارٍ العمل...":"1) تحليل وبناء الخطة"}</button>
       {plan&&<button onClick={()=>setApproved(!approved)} disabled={running} className={`rounded-xl border px-5 py-3 font-semibold ${approved?"border-emerald-400 bg-emerald-500/20 text-emerald-300":"border-amber-400/40 bg-amber-500/10 text-amber-200"}`}>{approved?"✓ تمت الموافقة":"2) أوافق على التنفيذ"}</button>}
       {plan&&<button onClick={execute} disabled={!approved||running} className="rounded-xl bg-gradient-to-r from-fuchsia-500 to-indigo-600 px-5 py-3 font-semibold text-white disabled:opacity-30">{running?"جارٍ التنفيذ...":"3) تنفيذ الخطة"}</button>}
     </div>

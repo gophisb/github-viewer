@@ -8,6 +8,10 @@ const API_VERSION="2022-11-28";
 const MAX_FILES=8;
 const MAX_FILE_CHARS=70000;
 const MAX_TOTAL_CHARS=260000;
+const MEMORY_KEY="github-viewer-agent-memory-v1";
+const MEMORY_LIMIT=40;
+function loadMemory(repo:string){try{const all=JSON.parse(localStorage.getItem(MEMORY_KEY)||"{}");return Array.isArray(all[repo])?all[repo]:[]}catch{return []}}
+function saveMemory(repo:string,entry:any){try{const all=JSON.parse(localStorage.getItem(MEMORY_KEY)||"{}");const next=[...(Array.isArray(all[repo])?all[repo]:[]),entry].slice(-MEMORY_LIMIT);all[repo]=next;localStorage.setItem(MEMORY_KEY,JSON.stringify(all))}catch{}}
 
 async function gh<T>(path:string, token:string, init:RequestInit={}):Promise<T>{
   const r=await fetch(path.startsWith("http")?path:API+path,{
@@ -96,12 +100,15 @@ export default function AIEngineeringAgent({repos,token,onDone}:{repos:RepoLite[
   const [log,setLog]=useState<string[]>([]);
   const [result,setResult]=useState("");
   const [branch,setBranch]=useState("");
+  const [history,setHistory]=useState<any[]>([]);
 
   useEffect(()=>{if(!repoName&&repos[0])setRepoName(repos[0].full_name)},[repos,repoName]);
+  useEffect(()=>{if(repoName)setHistory(loadMemory(repoName))},[repoName]);
 
   const manifest=useMemo(()=>zip?`ZIP: ${zip.name} | ${Math.round(zip.size/1024)} KB`:"",[zip]);
 
   const pushLog=(s:string)=>setLog(x=>[...x,s]);
+  const remember=(entry:any)=>{if(!repoName)return;saveMemory(repoName,{time:new Date().toISOString(),...entry});setHistory(loadMemory(repoName))};
 
   const analyze=async()=>{
     if(!command.trim()||!repoName||running)return;
@@ -139,7 +146,9 @@ ${repoMap}
 - إذا لم يوجد ZIP فلا تستخدم upload_zip.
 - لا تفترض أسماء ملفات غير منطقية؛ اختر مسارات مرجحة فقط.`;
       pushLog("PLAN: بناء خطة منظمة...");
-      setPlan(jsonFrom(await ai(model.trim(),prompt)));
+      const builtPlan=jsonFrom(await ai(model.trim(),prompt));
+      setPlan(builtPlan);
+      remember({command,stage:"PLAN",summary:builtPlan.summary||"",risk:builtPlan.risk||"unknown"});
       pushLog("PLAN: اكتملت الخطة؛ التنفيذ متوقف حتى موافقة المستخدم.");
     }catch(e){setResult(e instanceof Error?e.message:"فشل التحليل.");}
     finally{setRunning(false)}
@@ -151,6 +160,7 @@ ${repoMap}
     if(!repo)return;
     setRunning(true);setResult("");
     try{
+      remember({command,stage:"EXECUTE_START",summary:plan.summary||""});
       const base=await gh<any>(`/repos/${repo.full_name}/git/ref/heads/${repo.default_branch}`,token);
       const baseSha=base.object.sha;
       const newBranch=`ai-agent/${Date.now()}`;
@@ -233,6 +243,7 @@ ${wantsModify?`أعد JSON فقط:
       const decision=jsonFrom(await ai(model.trim(),second));
 
       if(!wantsModify){
+        remember({command,stage:"INSPECT_COMPLETE",summary:decision.summary||"",findings:decision.findings||[]});
         setResult(JSON.stringify(decision,null,2));pushLog("VERIFY: اكتمل الفحص؛ لم تُجر أي تغييرات.");return;
       }
 
@@ -323,6 +334,7 @@ ${repairContext}
       const finalStatus=ciReport?.failed?"CI ما زال فاشلًا بعد الحد الأقصى؛ SAFE-STOP.":(ciReport?.pending?"CI ما زال قيد التشغيل؛ المراجعة اليدوية مطلوبة.":"CI مكتمل دون فشل معروف.");
       if(!prNumber)throw new Error("تعذر تحديد رقم الـPR.");
       await gh<any>(`/repos/${repo.full_name}/pulls/${prNumber}`,token,{method:"PATCH",body:JSON.stringify({body:`## AI Engineering Agent\n\n**الطلب:**\n${command}\n\n**الخطة:**\n${decision.summary||plan.summary||"—"}\n\n**الملفات:**\n${[...new Set(changedForRepair)].map((x:string)=>`- ${x}`).join("\n")}\n\n**Diff:**\n${finalStats||"—"}\n\n**CI:**\n${ci}\n\n**الحالة:**\n${finalStatus}\n\n**الإصلاحات:**\n${repairText}\n\n> لم يتم تعديل الفرع الأساسي. لا يوجد دمج تلقائي؛ القرار البشري مطلوب.`})});
+      remember({command,stage:"CHECKPOINT",branch:newBranch,pr:prNumber,status:finalStatus,files:[...new Set(changedForRepair)]});
       setResult(`اكتمل التنفيذ على ${newBranch}. PR #${prNumber}.\n${finalStatus}\n\n${finalStats||"لا توجد إحصاءات diff."}`);
       if(ciReport?.failed)pushLog("SAFE-STOP: CI ما زال فاشلًا؛ لم يتم الدمج.");
       else pushLog("CHECKPOINT: التنفيذ والتحقق وCI اكتملوا؛ الـPR ينتظر المراجعة البشرية.");

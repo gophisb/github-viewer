@@ -551,7 +551,18 @@ export default function App() {
     setCanInstall(false);
   };
 
-  if (!user && !loading) {
+  if (!user) {
+    if (loading) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(125%_125%_at_50%_0%,#1e1b4b_0%,#0f172a_50%,#020617_100%)] px-4 text-slate-100">
+          <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 p-6 text-center shadow-2xl">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-500/20 text-2xl">⏳</div>
+            <h2 className="mt-4 text-xl font-bold">جارٍ الاتصال بـ GitHub</h2>
+            <p className="mt-2 text-sm text-slate-400">يتم التحقق من الرمز وتحميل المستودعات. لن تختفي الواجهة أثناء الانتظار.</p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="min-h-screen bg-[radial-gradient(125%_125%_at_50%_0%,#1e1b4b_0%,#0f172a_50%,#020617_100%)] text-slate-100">
         <ConnectionScreen onConnect={connect} onPublic={loadPublic} error={error} />

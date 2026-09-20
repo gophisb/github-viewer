@@ -1,14 +1,13 @@
-import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { seal } from "../session";
 
-function cookies(req:VercelRequest) {
+function cookies(req:any) {
   return Object.fromEntries((req.headers.cookie||"").split(";").map(x=>x.trim()).filter(Boolean).map(x=>{
     const i=x.indexOf("="); return [x.slice(0,i),decodeURIComponent(x.slice(i+1))];
   }));
 }
 function b64url(bytes:Uint8Array){return Buffer.from(bytes).toString("base64").replace(/=/g,"").replace(/\+/g,"-").replace(/\//g,"_");}
 
-export default async function handler(req:VercelRequest,res:VercelResponse) {
+export default async function handler(req:any,res:any) {
   if(req.method!=="GET") return res.status(405).json({error:"Method not allowed"});
   const {code,state}=req.query, c=cookies(req);
   let oauth:any=null;

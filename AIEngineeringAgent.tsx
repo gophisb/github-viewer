@@ -89,6 +89,9 @@ export default function AIEngineeringAgent({repos,token,onDone}:{repos:RepoLite[
     localStorage.setItem(AI_KEY,apiKey.trim());localStorage.setItem(AI_MODEL_KEY,model.trim());
     try{
       let zipInfo=manifest;
+      const tree=await gh<any>(`/repos/${repo.full_name}/git/trees/${encodeURIComponent(repo.default_branch)}?recursive=1`,token);
+      const repoPaths=(tree.tree||[]).filter((x:any)=>x.type==="blob"&&typeof x.path==="string").slice(0,1800).map((x:any)=>x.path);
+      const repoMap="\\nREPOSITORY FILE MAP:\\n"+repoPaths.join("\\n");
       if(zip){
         if(!window.JSZip)throw new Error("محرك ZIP غير جاهز؛ أعد تحميل الصفحة.");
         const z=await window.JSZip.loadAsync(zip);
@@ -100,6 +103,7 @@ export default function AIEngineeringAgent({repos,token,onDone}:{repos:RepoLite[
 الفرع الأساسي: ${repo.default_branch}
 طلب المستخدم: ${command}
 ZIP: ${zipInfo||"لا يوجد"}
+${repoMap}
 
 هدفك بناء خطة هندسية قابلة للتنفيذ، لا تنفيذها الآن.
 أعد JSON فقط:

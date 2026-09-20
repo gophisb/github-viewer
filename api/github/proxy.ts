@@ -28,16 +28,18 @@ export default async function handler(req:VercelRequest,res:VercelResponse) {
   if(method==="OPTIONS") return res.status(204).end();
   if(!["GET","POST","PUT","PATCH"].includes(method)) return res.status(405).json({error:"Method not allowed"});
   const session=await readSession(req);
-  if(!session?.token) return res.status(401).json({error:"GitHub session required"});
   const rawPath=String(req.query.path||"");
   const path=rawPath.startsWith("/")?rawPath:"/"+rawPath;
-  if(!pathAllowed(path)) return res.status(403).json({error:"GitHub operation is not allowlisted."});
+  const publicAllowed=/^\\/users\\/[A-Za-z0-9-]+(?:\\/(repos|events|events\\/public))?(?:\\?.*)?$/.test(path);
+  if(!session?.token && !(SAFE_METHODS.has(method) && publicAllowed)) return res.status(401).json({error:"GitHub session required"});
+  if(!session?.token && !publicAllowed) return res.status(403).json({error:"GitHub operation is not allowlisted."});
   if(!SAFE_METHODS.has(method)) {
     const c=cookies(req);
     if(!originOk(req) || !c.github_csrf || c.github_csrf !== req.headers["x-csrf-token"]) return res.status(403).json({error:"CSRF validation failed."});
   }
   const url="https://api.github.com"+path;
-  const headers:any={"Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28","Authorization":`Bearer ${session.token}`};
+  const headers:any={"Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28"};
+  if(session?.token) headers["Authorization"]=`Bearer ${session.token}`;
   let body:any=undefined;
   if(!SAFE_METHODS.has(method)) {
     headers["Content-Type"]="application/json";

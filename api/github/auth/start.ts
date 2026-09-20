@@ -1,11 +1,10 @@
-import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 function b64url(bytes: Uint8Array) { return Buffer.from(bytes).toString("base64").replace(/=/g,"").replace(/\+/g,"-").replace(/\//g,"_"); }
 async function challenge(verifier:string) {
   const hash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(verifier));
   return b64url(new Uint8Array(hash));
 }
-export default async function handler(req:VercelRequest,res:VercelResponse) {
+export default async function handler(req:any,res:any) {
   if(req.method!=="GET") return res.status(405).json({error:"Method not allowed"});
   const clientId=process.env.GITHUB_CLIENT_ID, appUrl=process.env.APP_URL;
   if(!clientId||!appUrl) return res.status(500).json({error:"GITHUB_CLIENT_ID و APP_URL غير مضبوطين على الخادم."});

@@ -230,7 +230,7 @@ ${wantsModify?`أعد JSON فقط:
         if(f.type!=="file"||!f.sha)throw new Error(`فشل التحقق من الملف: ${path}`);
       }
 
-      const compare=await gh<any>(`/repos/${repo.full_name}/compare/${encodeURIComponent(repo.default_branch)}...${encodeURIComponent(newBranch)}`,token);
+      const compare=await gh<any>(`/repos/${repo.full_name}/compare/${encodeURIComponent(repo.default_branch)}...${newBranch}`,token);
       const stats=(compare.files||[]).map((f:any)=>`${f.filename}: +${f.additions||0} / -${f.deletions||0}`).join("\n");
       pushLog(`DIFF: ${changedPaths.length} ملفات؛ ${compare.total_commits||0} commits`);
 

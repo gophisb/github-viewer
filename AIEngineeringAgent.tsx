@@ -13,16 +13,15 @@ const MEMORY_LIMIT=40;
 function loadMemory(repo:string){try{const all=JSON.parse(localStorage.getItem(MEMORY_KEY)||"{}");return Array.isArray(all[repo])?all[repo]:[]}catch{return []}}
 function saveMemory(repo:string,entry:any){try{const all=JSON.parse(localStorage.getItem(MEMORY_KEY)||"{}");const next=[...(Array.isArray(all[repo])?all[repo]:[]),entry].slice(-MEMORY_LIMIT);all[repo]=next;localStorage.setItem(MEMORY_KEY,JSON.stringify(all))}catch{}}
 
-async function gh<T>(path:string, token:string, init:RequestInit={}):Promise<T>{
-  const r=await fetch(path.startsWith("http")?path:API+path,{
-    ...init,
-    headers:{
-      Accept:"application/vnd.github+json",
-      "X-GitHub-Api-Version":API_VERSION,
-      ...(token?{Authorization:`Bearer ${token}`}:{}),
-      ...(init.body?{"Content-Type":"application/json"}:{})
-    }
-  });
+async function gh<T>(path:string, _token:string="", init:RequestInit={}):Promise<T>{
+  const headers:any={...(init.headers||{}),Accept:"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28"};
+  const method=(init.method||"GET").toUpperCase();
+  if(!["GET","HEAD"].includes(method)){
+    const m=document.cookie.match(/(?:^|; )github_csrf=([^;]+)/);
+    if(m) headers["X-CSRF-Token"]=decodeURIComponent(m[1]);
+    if(init.body) headers["Content-Type"]="application/json";
+  }
+  const r=await fetch("/api/github/proxy?path="+encodeURIComponent(path),{...init,headers,credentials:"include"});
   if(!r.ok) throw new Error((await r.text())||`GitHub API ${r.status}`);
   return r.status===204?({} as T):r.json();
 }
@@ -58,11 +57,12 @@ function decodeContent(content:string){
 }
 
 
-async function ghText(path:string, token:string){
-  const r=await fetch(path.startsWith("http")?path:API+path,{headers:{Accept:"application/vnd.github+json","X-GitHub-Api-Version":API_VERSION,...(token?{Authorization:`Bearer ${token}`}: {})}});
+async function ghText(path:string, _token:string=""){
+  const r=await fetch("/api/github/proxy?path="+encodeURIComponent(path),{credentials:"include",headers:{"Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28"}});
   if(!r.ok) throw new Error((await r.text())||`GitHub API ${r.status}`);
   return r.text();
 }
+
 async function getCIReport(repo:string,sha:string,token:string){
   const runs=await gh<any>(`/repos/${repo}/actions/runs?head_sha=${encodeURIComponent(sha)}&per_page=10`,token).catch(()=>({workflow_runs:[]}));
   const workflowRuns=(runs.workflow_runs||[]).slice(0,10); const jobs:any[]=[];

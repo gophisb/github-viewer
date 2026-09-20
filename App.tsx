@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import AIEngineeringAgent from "./AIEngineeringAgent";
 
 declare global { interface Window { JSZip: any } }
 
@@ -799,7 +800,7 @@ export default function App() {
             </section>
 
             <ZipUploader repos={repos} token={token} onDone={() => { fetchAllRepos(token).then(setRepos).catch(() => {}); }} />
-            <AIAgent repos={repos} token={token} onDone={() => { fetchAllRepos(token).then(setRepos).catch(() => {}); }} />
+            <AIEngineeringAgent repos={repos} token={token} onDone={() => { fetchAllRepos(token).then(setRepos).catch(() => {}); }} />
             <section className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-5">
               <div className="flex flex-col gap-3 lg:flex-row">
                 <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="ابحث في المستودعات..." className="flex-1 rounded-xl border border-white/10 bg-slate-950/50 px-4 py-3 text-sm outline-none focus:border-indigo-400/60" />

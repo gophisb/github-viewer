@@ -298,7 +298,7 @@ function ConnectionScreen({
 }
 
 export default function App() {
-  const [token, setToken] = useState(getStoredToken());
+  const [token, setToken] = useState("");
   const [user, setUser] = useState<GitHubUser | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
@@ -316,29 +316,9 @@ export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState<Event | null>(null);
   const [canInstall, setCanInstall] = useState(false);
 
-  const connect = async (newToken: string) => {
-    const clean = newToken.trim();
-    if (!clean) return;
-    setLoading(true);
+  const connect = () => {
     setError("");
-    try {
-      const me = await githubFetch<GitHubUser>("/user", clean);
-      const [allRepos, events] = await Promise.all([
-        fetchAllRepos(clean),
-        githubFetch<Activity[]>(`/users/${me.login}/events?per_page=20`, clean).catch(() => []),
-      ]);
-      localStorage.setItem(TOKEN_KEY, clean);
-      localStorage.setItem(CACHE_KEY, JSON.stringify({ user: me, repos: allRepos, activity: events }));
-      setToken(clean);
-      setUser(me);
-      setRepos(allRepos);
-      setActivity(events);
-      setPublicMode(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "فشل الاتصال.");
-    } finally {
-      setLoading(false);
-    }
+    window.location.href="/api/github/auth/start";
   };
 
   const loadPublic = async (login: string) => {
@@ -362,25 +342,19 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!token) return;
     setLoading(true);
     Promise.all([
-      githubFetch<GitHubUser>("/user", token),
-      fetchAllRepos(token),
-      githubFetch<Activity[]>(`/user/events?per_page=20`, token).catch(() => []),
+      githubFetch<GitHubUser>("/user"),
+      fetchAllRepos(),
+      githubFetch<Activity[]>("/user/events?per_page=20").catch(() => []),
     ])
       .then(([me, allRepos, events]) => {
-        setUser(me);
-        setRepos(allRepos);
-        setActivity(events);
-        setPublicMode(false);
+        setUser(me); setRepos(allRepos); setActivity(events); setPublicMode(false); setToken("session");
       })
-      .catch(() => {
-        localStorage.removeItem(TOKEN_KEY);
-        setToken("");
-      })
+      .catch(() => setToken(""))
       .finally(() => setLoading(false));
   }, []);
+
 
   useEffect(() => {
     const onPrompt = (e: Event) => {
@@ -466,15 +440,11 @@ export default function App() {
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem(TOKEN_KEY);
-    setToken("");
-    setUser(null);
-    setRepos([]);
-    setActivity([]);
-    setSelectedRepo(null);
-    setFile(null);
+  const logout = async () => {
+    try { await fetch("/api/github/auth/logout",{method:"POST",credentials:"include",headers:{"X-CSRF-Token":csrfToken()}}); } catch {}
+    setToken(""); setUser(null); setRepos([]); setActivity([]); setSelectedRepo(null); setFile(null);
   };
+
 
   const installApp = async () => {
     if (!deferredPrompt) return;
@@ -489,7 +459,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-[radial-gradient(125%_125%_at_50%_0%,#1e1b4b_0%,#0f172a_50%,#020617_100%)] text-slate-100">
         <ConnectionScreen onConnect={connect} onPublic={loadPublic} error={error} />
-        <footer className="border-t border-white/5 py-6 text-center text-xs text-slate-500">GitHub REST API · يعمل مباشرة من المتصفح</footer>
+        <footer className="border-t border-white/5 py-6 text-center text-xs text-slate-500">GitHub REST API · الجلسة محمية على الخادم</footer>
       </div>
     );
   }

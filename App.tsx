@@ -59,68 +59,40 @@ type Activity = {
   created_at: string;
 };
 
-const API = "https://api.github.com";
-const API_VERSION = "2022-11-28";
-const TOKEN_KEY = "github-viewer-token";
 const CACHE_KEY = "github-viewer-dashboard";
 
 const LANG_COLORS: Record<string, string> = {
-  JavaScript: "#f1e05a",
-  TypeScript: "#3178c6",
-  Python: "#3572A5",
-  "C++": "#f34b7d",
-  C: "#555555",
-  "C#": "#178600",
-  Java: "#b07219",
-  Go: "#00ADD8",
-  Rust: "#dea584",
-  Ruby: "#701516",
-  PHP: "#4F5D95",
-  Swift: "#F05138",
-  Kotlin: "#A97BFF",
-  Dart: "#00B4AB",
-  Shell: "#89e051",
-  HTML: "#e34c26",
-  CSS: "#563d7c",
+  JavaScript: "#f1e05a", TypeScript: "#3178c6", Python: "#3572A5", "C++": "#f34b7d",
+  C: "#555555", "C#": "#178600", Java: "#b07219", Go: "#00ADD8", Rust: "#dea584",
+  Ruby: "#701516", PHP: "#4F5D95", Swift: "#F05138", Kotlin: "#A97BFF", Dart: "#00B4AB",
+  Shell: "#89e051", HTML: "#e34c26", CSS: "#563d7c",
 };
 
-function getStoredToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY) || "";
-  } catch {
-    return "";
-  }
+function csrfToken() {
+  const m=document.cookie.match(/(?:^|; )github_csrf=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : "";
 }
-
-async function githubFetch<T>(path: string, token = getStoredToken(), init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path.startsWith("http") ? path : API + path, {
-    ...init,
-    headers: {
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": API_VERSION,
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-  });
-
-  if (response.status === 401) throw new Error("رمز GitHub غير صالح أو منتهي الصلاحية.");
-  if (response.status === 403) throw new Error("رفض GitHub الطلب أو تم تجاوز حد الطلبات.");
-  if (response.status === 404) throw new Error("لم يتم العثور على المورد أو لا يملك الرمز صلاحية الوصول إليه.");
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(body || `GitHub API: ${response.status}`);
+async function githubFetch<T>(path: string, _legacyToken = "", init: RequestInit = {}): Promise<T> {
+  const headers:any = { ...(init.headers||{}), Accept:"application/vnd.github+json", "X-GitHub-Api-Version":"2022-11-28" };
+  const method=(init.method||"GET").toUpperCase();
+  if(!["GET","HEAD"].includes(method)) {
+    const csrf=csrfToken();
+    if(csrf) headers["X-CSRF-Token"]=csrf;
   }
+  const response=await fetch("/api/github/proxy?path="+encodeURIComponent(path),{...init,headers,credentials:"include"});
+  if(response.status===401) throw new Error("جلسة GitHub غير موجودة أو منتهية. أعد تسجيل الدخول.");
+  if(response.status===403) throw new Error("رفض GitHub الطلب أو فشل فحص CSRF/الصلاحيات.");
+  if(response.status===404) throw new Error("لم يتم العثور على المورد أو لا تملك الجلسة الصلاحية للوصول إليه.");
+  if(!response.ok){const body=await response.text();throw new Error(body||`GitHub API: ${response.status}`);}
   return response.json() as Promise<T>;
 }
 
-async function fetchAllRepos(token: string) {
+async function fetchAllRepos(_legacyToken = "") {
   const all: Repo[] = [];
-  for (let page = 1; page <= 10; page++) {
-    const batch = await githubFetch<Repo[]>(
-      `/user/repos?per_page=100&page=${page}&sort=updated&direction=desc&visibility=all&affiliation=owner,collaborator,organization_member`,
-      token
-    );
+  for(let page=1;page<=10;page++){
+    const batch=await githubFetch<Repo[]>(`/user/repos?per_page=100&page=${page}&sort=updated&direction=desc&visibility=all&affiliation=owner,collaborator,organization_member`);
     all.push(...batch);
-    if (batch.length < 100) break;
+    if(batch.length<100) break;
   }
   return all;
 }
@@ -185,7 +157,7 @@ function RepoCard({ repo, onOpen }: { repo: Repo; onOpen: (repo: Repo) => void }
 }
 
 
-function ZipUploader({ repos, token, onDone }: { repos: Repo[]; token: string; onDone: () => void }) {
+function ZipUploader({ repos, token: _token, onDone }: { repos: Repo[]; token?: string; onDone: () => void }) {
   const [repoName, setRepoName] = useState(repos[0]?.full_name || "");
   const [folder, setFolder] = useState("");
   const [zipFile, setZipFile] = useState<File | null>(null);
@@ -259,13 +231,11 @@ function ConnectionScreen({
   onPublic,
   error,
 }: {
-  onConnect: (token: string) => void;
+  onConnect: () => void;
   onPublic: (login: string) => void;
   error: string;
 }) {
-  const [token, setToken] = useState("");
   const [publicUser, setPublicUser] = useState("");
-  const [showToken, setShowToken] = useState(false);
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-10 sm:py-16">
@@ -285,45 +255,15 @@ function ConnectionScreen({
         <div className="flex items-center gap-3">
           <span className="text-2xl">🔐</span>
           <div>
-            <h2 className="font-semibold">ربط حساب GitHub</h2>
-            <p className="text-xs text-slate-400">يُرسل الرمز إلى api.github.com فقط.</p>
+            <h2 className="font-semibold">ربط حساب GitHub بأمان</h2>
+            <p className="text-xs text-slate-400">تسجيل الدخول يتم عبر GitHub. لا يتم حفظ Personal Access Token في المتصفح.</p>
           </div>
         </div>
-
-        <div className="mt-5 flex gap-2">
-          <input
-            type={showToken ? "text" : "password"}
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="Personal Access Token"
-            className="min-w-0 flex-1 rounded-xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-white outline-none focus:border-indigo-400/60"
-            dir="ltr"
-            autoComplete="off"
-          />
-          <button onClick={() => setShowToken(!showToken)} className="rounded-xl border border-white/10 px-4 text-sm text-slate-300">
-            {showToken ? "إخفاء" : "إظهار"}
-          </button>
-        </div>
-
-        <button
-          onClick={() => onConnect(token)}
-          disabled={!token.trim()}
-          className="mt-3 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-5 py-3 font-semibold text-white disabled:opacity-40"
-        >
-          ربط الحساب
+        <button onClick={onConnect} className="mt-5 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-600 px-5 py-3 font-semibold text-white">
+          تسجيل الدخول عبر GitHub
         </button>
-
         <div className="mt-4 rounded-xl bg-slate-950/40 p-4 text-sm text-slate-400">
-          <p className="font-medium text-slate-200">إنشاء الرمز</p>
-          <p className="mt-2">أنشئ Personal Access Token بصلاحيات القراءة المناسبة لمستودعاتك. للقراءة فقط يكفي منح الصلاحيات اللازمة مثل Contents: Read.</p>
-          <a
-            href="https://github.com/settings/personal-access-tokens/new"
-            target="_blank"
-            rel="noreferrer"
-            className="mt-3 inline-block text-indigo-300 hover:underline"
-          >
-            فتح إعدادات GitHub لإنشاء رمز ↗
-          </a>
+          الجلسة محمية بـ HttpOnly cookie، والطلبات المعدِّلة تمر عبر خادم التطبيق مع فحص CSRF.
         </div>
 
         <div className="my-6 flex items-center gap-3">
@@ -332,13 +272,7 @@ function ConnectionScreen({
           <div className="h-px flex-1 bg-white/10" />
         </div>
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            onPublic(publicUser);
-          }}
-          className="flex gap-2"
-        >
+        <form onSubmit={(e) => { e.preventDefault(); onPublic(publicUser); }} className="flex gap-2">
           <input
             value={publicUser}
             onChange={(e) => setPublicUser(e.target.value)}
@@ -364,7 +298,7 @@ function ConnectionScreen({
 }
 
 export default function App() {
-  const [token, setToken] = useState(getStoredToken());
+  const [token, setToken] = useState("");
   const [user, setUser] = useState<GitHubUser | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
@@ -382,29 +316,9 @@ export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState<Event | null>(null);
   const [canInstall, setCanInstall] = useState(false);
 
-  const connect = async (newToken: string) => {
-    const clean = newToken.trim();
-    if (!clean) return;
-    setLoading(true);
+  const connect = () => {
     setError("");
-    try {
-      const me = await githubFetch<GitHubUser>("/user", clean);
-      const [allRepos, events] = await Promise.all([
-        fetchAllRepos(clean),
-        githubFetch<Activity[]>(`/users/${me.login}/events?per_page=20`, clean).catch(() => []),
-      ]);
-      localStorage.setItem(TOKEN_KEY, clean);
-      localStorage.setItem(CACHE_KEY, JSON.stringify({ user: me, repos: allRepos, activity: events }));
-      setToken(clean);
-      setUser(me);
-      setRepos(allRepos);
-      setActivity(events);
-      setPublicMode(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "فشل الاتصال.");
-    } finally {
-      setLoading(false);
-    }
+    window.location.href="/api/github/auth/start";
   };
 
   const loadPublic = async (login: string) => {
@@ -428,25 +342,19 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!token) return;
     setLoading(true);
     Promise.all([
-      githubFetch<GitHubUser>("/user", token),
-      fetchAllRepos(token),
-      githubFetch<Activity[]>(`/user/events?per_page=20`, token).catch(() => []),
+      githubFetch<GitHubUser>("/user"),
+      fetchAllRepos(),
+      githubFetch<Activity[]>("/user/events?per_page=20").catch(() => []),
     ])
       .then(([me, allRepos, events]) => {
-        setUser(me);
-        setRepos(allRepos);
-        setActivity(events);
-        setPublicMode(false);
+        setUser(me); setRepos(allRepos); setActivity(events); setPublicMode(false); setToken("session");
       })
-      .catch(() => {
-        localStorage.removeItem(TOKEN_KEY);
-        setToken("");
-      })
+      .catch(() => setToken(""))
       .finally(() => setLoading(false));
   }, []);
+
 
   useEffect(() => {
     const onPrompt = (e: Event) => {
@@ -532,15 +440,11 @@ export default function App() {
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem(TOKEN_KEY);
-    setToken("");
-    setUser(null);
-    setRepos([]);
-    setActivity([]);
-    setSelectedRepo(null);
-    setFile(null);
+  const logout = async () => {
+    try { await fetch("/api/github/auth/logout",{method:"POST",credentials:"include",headers:{"X-CSRF-Token":csrfToken()}}); } catch {}
+    setToken(""); setUser(null); setRepos([]); setActivity([]); setSelectedRepo(null); setFile(null);
   };
+
 
   const installApp = async () => {
     if (!deferredPrompt) return;
@@ -555,7 +459,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-[radial-gradient(125%_125%_at_50%_0%,#1e1b4b_0%,#0f172a_50%,#020617_100%)] text-slate-100">
         <ConnectionScreen onConnect={connect} onPublic={loadPublic} error={error} />
-        <footer className="border-t border-white/5 py-6 text-center text-xs text-slate-500">GitHub REST API · يعمل مباشرة من المتصفح</footer>
+        <footer className="border-t border-white/5 py-6 text-center text-xs text-slate-500">GitHub REST API · الجلسة محمية على الخادم</footer>
       </div>
     );
   }

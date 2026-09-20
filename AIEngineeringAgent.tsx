@@ -58,6 +58,34 @@ function decodeContent(content:string){
   return new TextDecoder().decode(Uint8Array.from(bin,(c)=>c.charCodeAt(0)));
 }
 
+
+async function ghText(path:string, token:string){
+  const r=await fetch(path.startsWith("http")?path:API+path,{headers:{Accept:"application/vnd.github+json","X-GitHub-Api-Version":API_VERSION,...(token?{Authorization:`Bearer ${token}`}: {})}});
+  if(!r.ok) throw new Error((await r.text())||`GitHub API ${r.status}`);
+  return r.text();
+}
+async function getCIReport(repo:string,sha:string,token:string){
+  const runs=await gh<any>(`/repos/${repo}/actions/runs?head_sha=${encodeURIComponent(sha)}&per_page=10`,token).catch(()=>({workflow_runs:[]}));
+  const workflowRuns=(runs.workflow_runs||[]).slice(0,10); const jobs:any[]=[];
+  for(const run of workflowRuns.slice(0,5)){
+    const jr=await gh<any>(`/repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`,token).catch(()=>({jobs:[]}));
+    for(const job of (jr.jobs||[])) if(job.conclusion && job.conclusion!=="success"){
+      let logs=""; try{logs=await ghText(`/repos/${repo}/actions/jobs/${job.id}/logs`,token);}catch{}
+      jobs.push({run_id:run.id,run_name:run.name,run_url:run.html_url,job_id:job.id,name:job.name,status:job.status,conclusion:job.conclusion,steps:job.steps||[],logs:String(logs).slice(-18000)});
+    }
+  }
+  const all=await gh<any>(`/repos/${repo}/commits/${sha}/check-runs`,token).catch(()=>({check_runs:[]}));
+  const checks=(all.check_runs||[]).map((x:any)=>({name:x.name,status:x.status,conclusion:x.conclusion,details_url:x.details_url}));
+  const pending=checks.some((x:any)=>x.status!=="completed")||workflowRuns.some((x:any)=>["queued","in_progress","waiting","requested","pending"].includes(x.status));
+  const failed=checks.some((x:any)=>x.status==="completed"&&!["success","neutral","skipped"].includes(x.conclusion||""))||workflowRuns.some((x:any)=>["failure","timed_out","cancelled","action_required"].includes(x.conclusion||""))||jobs.some((x:any)=>x.conclusion!=="success");
+  return {checks,workflowRuns,jobs,pending,failed};
+}
+async function waitForCI(repo:string,sha:string,token:string,maxPolls=12){
+  let last:any={checks:[],workflowRuns:[],jobs:[],pending:true,failed:false};
+  for(let i=0;i<maxPolls;i++){ await new Promise(r=>setTimeout(r,4000)); last=await getCIReport(repo,sha,token); if((last.checks.length||last.workflowRuns.length)&&!last.pending)return last; }
+  return last;
+}
+
 function fileRef(repo:string,path:string,ref:string){
   return `/repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`;
 }
@@ -159,25 +187,15 @@ ${repoMap}
         await gh(`/repos/${repo.full_name}/git/refs/heads/${newBranch}`,token,{method:"PATCH",body:JSON.stringify({sha:c.sha,force:false})});
         pushLog("VERIFY: التحقق من رأس الفرع...");
         await gh(`/repos/${repo.full_name}/git/ref/heads/${newBranch}`,token);
-        pushLog("CI: انتظار تشغيل فحوص GitHub Actions على commit الفرع...");
-      let ciDetail="لم تبدأ فحوص PR بعد أو لا توجد GitHub Actions.";
-      const headSha=compare.head?.sha;
-      if(headSha){
-        for(let attempt=0;attempt<8;attempt++){
-          await new Promise(r=>setTimeout(r,4000));
-          const runs=await gh<any>(`/repos/${repo.full_name}/commits/${headSha}/check-runs`,token).catch(()=>null);
-          const arr=runs?.check_runs||[];
-          if(arr.length){
-            const pending=arr.some((x:any)=>x.status!=="completed");
-            ciDetail=arr.map((x:any)=>`${x.name}: ${x.status}/${x.conclusion||"pending"}`).join("\n");
-            if(!pending)break;
-          }
-        }
-      }
-
-      const pr=await gh<any>(`/repos/${repo.full_name}/pulls`,token,{method:"POST",body:JSON.stringify({title:`AI Agent: ${command.slice(0,72)}`,head:newBranch,base:repo.default_branch,body:`طلب المستخدم:\n${command}\n\nالخطة:\n${JSON.stringify(plan,null,2)}`})});
-        setResult(`تم رفع ZIP على فرع ${newBranch} وإنشاء Pull Request #${pr.number}. الفرع الأساسي لم يُمس.`);
-        pushLog("CHECKPOINT: PR جاهز للمراجعة.");
+        pushLog("CI: انتظار الفحوص على commit الفرع...");
+        const uploadCompare=await gh<any>(`/repos/${repo.full_name}/compare/${encodeURIComponent(repo.default_branch)}...${encodeURIComponent(newBranch)}`,token);
+        const uploadHeadSha=uploadCompare.head?.sha||c.sha;
+        const uploadCI=await waitForCI(repo.full_name,uploadHeadSha,token,10);
+        const uploadCIText=uploadCI.checks.map((x:any)=>`${x.name}: ${x.status}/${x.conclusion||"pending"}`).join("\n")||"لا توجد فحوص مسجلة.";
+        const uploadPR=await gh<any>(`/repos/${repo.full_name}/pulls`,token,{method:"POST",body:JSON.stringify({title:`AI Agent: ${command.slice(0,72)}`,head:newBranch,base:repo.default_branch,body:`طلب المستخدم:\n${command}\n\nالخطة:\n${JSON.stringify(plan,null,2)}\n\nCI:\n${uploadCIText}\n\n> الفرع الأساسي لم يُمس. لا دمج تلقائي.`})});
+        setResult(`تم رفع ZIP على فرع ${newBranch} وإنشاء Pull Request #${uploadPR.number}.\nCI: ${uploadCIText}`);
+        if(uploadCI.failed)pushLog("CI: فشل؛ SAFE-STOP. لا إصلاح تلقائي للـZIP.");
+        else pushLog("CHECKPOINT: PR جاهز للمراجعة.");
         onDone();return;
       }
 
@@ -251,19 +269,62 @@ ${wantsModify?`أعد JSON فقط:
       pushLog(`DIFF: ${changedPaths.length} ملفات؛ ${compare.total_commits||0} commits`);
 
       let ci="لم يتم العثور على فحوص CI مرتبطة بعد.";
-      const statuses=await gh<any>(`/repos/${repo.full_name}/commits/${compare.head?.sha||newBranch}/status`,token).catch(()=>null);
-      if(statuses?.statuses?.length)ci=statuses.statuses.map((s:any)=>`${s.context}: ${s.state}`).join("\n");
+      let ciReport:any=null;
+      const headSha=compare.head?.sha||"";
+      if(headSha){ pushLog("CI: انتظار اكتمال الفحوص..."); ciReport=await waitForCI(repo.full_name,headSha,token,12); ci=ciReport.checks.map((x:any)=>`${x.name}: ${x.status}/${x.conclusion||"pending"}`).join("\n")||"لا توجد فحوص مسجلة."; }
 
-      const pr=await gh<any>(`/repos/${repo.full_name}/pulls`,token,{
-        method:"POST",
-        body:JSON.stringify({
-          title:`AI Agent: ${command.slice(0,72)}`,
-          head:newBranch,base:repo.default_branch,
-          body:`## AI Engineering Agent\\n\\n**الطلب:**\\n${command}\\n\\n**الخطة:**\\n${decision.summary||plan.summary||"—"}\\n\\n**الملفات:**\\n${changedPaths.map((x:string)=>`- ${x}`).join("\\n")}\\n\\n**Diff:**\\n${stats||"—"}\\n\\n**CI/status:**\\n${ci}\\n\\n**GitHub Actions:**\\n${ciDetail}\\n\\n> لم يتم تعديل الفرع الأساسي. المراجعة والدمج قرار بشري.`
-        })
-      });
-      setResult(`اكتمل التنفيذ على ${newBranch}. تم إنشاء Pull Request #${pr.number}.\\n\\n${stats||"لا توجد إحصاءات diff."}`);
-      pushLog("CHECKPOINT: التنفيذ مكتمل والـPR ينتظر المراجعة البشرية.");
+      const changedForRepair=[...changedPaths]; const repairHistory:string[]=[]; const MAX_REPAIR_CYCLES=2;
+      for(let cycle=1;cycle<=MAX_REPAIR_CYCLES && ciReport?.failed;cycle++){
+        pushLog(`REPAIR: دورة إصلاح ${cycle}/${MAX_REPAIR_CYCLES}`);
+        const failureEvidence=(ciReport.jobs||[]).map((j:any)=>`JOB ${j.name} [${j.conclusion}]\n${j.logs||"(لا توجد سجلات متاحة)"}`).join("\n\n").slice(0,36000);
+        let repairContext="";
+        for(const path of [...new Set(changedForRepair)].slice(0,MAX_FILES)){ const f=await gh<any>(fileRef(repo.full_name,path,newBranch),token); repairContext+=`\n===== CURRENT FILE: ${path} =====\n${decodeContent(f.content||"").slice(0,MAX_FILE_CHARS)}\n===== END FILE =====\n`; }
+        const repairPrompt=`أنت مهندس إصلاح CI داخل وكيل هندسي محكوم.
+طلب المستخدم: ${command}
+المستودع: ${repo.full_name}
+الفرع: ${newBranch}
+نتيجة الفحوص:
+${ci}
+أدلة الوظائف الفاشلة:
+${failureEvidence}
+الملفات الحالية على الفرع:
+${repairContext}
+
+أعد JSON فقط:
+{"summary":"...","changes":[{"path":"...","content":"المحتوى الكامل الجديد","reason":"..."}],"verification":["..."]}
+قواعد صارمة:
+- أصلح السبب المثبت من الأدلة فقط؛ لا تخمّن.
+- غيّر فقط ملفات موجودة في السياق.
+- لا حذف، لا أسرار، لا .env، لا .github/workflows.
+- الحد الأقصى ${MAX_FILES} ملفات.
+- المحتوى كامل الملف.
+- إذا لم يمكن إصلاح المشكلة بأمان: changes: [].
+- لا تغيّر بنية المشروع بلا ضرورة.`;
+        const repair=jsonFrom(await ai(apiKey.trim(),model.trim(),repairPrompt)); repairHistory.push(`الدورة ${cycle}: ${repair.summary||"—"}`);
+        const repairChanges=Array.isArray(repair.changes)?repair.changes:[];
+        if(!repairChanges.length){ pushLog("REPAIR: لا يوجد إصلاح آمن؛ SAFE-STOP."); break; }
+        if(repairChanges.length>MAX_FILES)throw new Error("الإصلاح تجاوز الحد المسموح.");
+        for(const ch of repairChanges){
+          const path=safePath(String(ch.path||"")); if(!changedForRepair.includes(path))throw new Error(`إصلاح خارج نطاق الملفات المقروءة: ${path}`);
+          const content=String(ch.content??""); if(!content)throw new Error(`محتوى إصلاح فارغ: ${path}`);
+          const existing=await gh<any>(fileRef(repo.full_name,path,newBranch),token);
+          await gh<any>(`/repos/${repo.full_name}/contents/${path}`,token,{method:"PUT",body:JSON.stringify({message:`AI Agent repair ${cycle}: ${command.slice(0,50)}`,content:btoa(unescape(encodeURIComponent(content))),sha:existing.sha,branch:newBranch})});
+          pushLog(`REPAIR: تم تعديل ${path}`);
+        }
+        const verifyCompare=await gh<any>(`/repos/${repo.full_name}/compare/${encodeURIComponent(repo.default_branch)}...${encodeURIComponent(newBranch)}`,token);
+        const newHead=verifyCompare.head?.sha; if(!newHead)throw new Error("تعذر تحديد commit الإصلاح.");
+        for(const path of repairChanges.map((x:any)=>safePath(String(x.path||"")))){ const f=await gh<any>(fileRef(repo.full_name,path,newBranch),token); if(f.type!=="file"||!f.sha)throw new Error(`فشل التحقق بعد الإصلاح: ${path}`); }
+        pushLog("CI: إعادة الاختبار بعد الإصلاح..."); ciReport=await waitForCI(repo.full_name,newHead,token,12); ci=ciReport.checks.map((x:any)=>`${x.name}: ${x.status}/${x.conclusion||"pending"}`).join("\n")||"لا توجد فحوص مسجلة.";
+      }
+
+      const finalCompare=await gh<any>(`/repos/${repo.full_name}/compare/${encodeURIComponent(repo.default_branch)}...${encodeURIComponent(newBranch)}`,token);
+      const finalStats=(finalCompare.files||[]).map((f:any)=>`${f.filename}: +${f.additions||0} / -${f.deletions||0}`).join("\n");
+      const repairText=repairHistory.length?repairHistory.join("\n"):"لم تُستخدم دورة إصلاح.";
+      const finalStatus=ciReport?.failed?"CI ما زال فاشلًا بعد الحد الأقصى؛ SAFE-STOP.":(ciReport?.pending?"CI ما زال قيد التشغيل؛ المراجعة اليدوية مطلوبة.":"CI مكتمل دون فشل معروف.");
+      const pr=await gh<any>(`/repos/${repo.full_name}/pulls`,token,{method:"POST",body:JSON.stringify({title:`AI Agent: ${command.slice(0,72)}`,head:newBranch,base:repo.default_branch,body:`## AI Engineering Agent\n\n**الطلب:**\n${command}\n\n**الخطة:**\n${decision.summary||plan.summary||"—"}\n\n**الملفات:**\n${[...new Set(changedForRepair)].map((x:string)=>`- ${x}`).join("\n")}\n\n**Diff:**\n${finalStats||"—"}\n\n**CI:**\n${ci}\n\n**الحالة:**\n${finalStatus}\n\n**الإصلاحات:**\n${repairText}\n\n> لم يتم تعديل الفرع الأساسي. لا يوجد دمج تلقائي؛ القرار البشري مطلوب.`})});
+      setResult(`اكتمل التنفيذ على ${newBranch}. PR #${pr.number}.\n${finalStatus}\n\n${finalStats||"لا توجد إحصاءات diff."}`);
+      if(ciReport?.failed)pushLog("SAFE-STOP: CI ما زال فاشلًا؛ لم يتم الدمج.");
+      else pushLog("CHECKPOINT: التنفيذ والتحقق وCI اكتملوا؛ الـPR ينتظر المراجعة البشرية.");
       onDone();
     }catch(e){setResult(e instanceof Error?e.message:"فشل التنفيذ.");pushLog("SAFE-STOP: توقف التنفيذ عند أول خطأ.");}
     finally{setRunning(false)}

@@ -159,7 +159,23 @@ ${repoMap}
         await gh(`/repos/${repo.full_name}/git/refs/heads/${newBranch}`,token,{method:"PATCH",body:JSON.stringify({sha:c.sha,force:false})});
         pushLog("VERIFY: التحقق من رأس الفرع...");
         await gh(`/repos/${repo.full_name}/git/ref/heads/${newBranch}`,token);
-        const pr=await gh<any>(`/repos/${repo.full_name}/pulls`,token,{method:"POST",body:JSON.stringify({title:`AI Agent: ${command.slice(0,72)}`,head:newBranch,base:repo.default_branch,body:`طلب المستخدم:\n${command}\n\nالخطة:\n${JSON.stringify(plan,null,2)}`})});
+        pushLog("CI: انتظار تشغيل فحوص GitHub Actions على commit الفرع...");
+      let ciDetail="لم تبدأ فحوص PR بعد أو لا توجد GitHub Actions.";
+      const headSha=compare.head?.sha;
+      if(headSha){
+        for(let attempt=0;attempt<8;attempt++){
+          await new Promise(r=>setTimeout(r,4000));
+          const runs=await gh<any>(`/repos/${repo.full_name}/commits/${headSha}/check-runs`,token).catch(()=>null);
+          const arr=runs?.check_runs||[];
+          if(arr.length){
+            const pending=arr.some((x:any)=>x.status!=="completed");
+            ciDetail=arr.map((x:any)=>`${x.name}: ${x.status}/${x.conclusion||"pending"}`).join("\n");
+            if(!pending)break;
+          }
+        }
+      }
+
+      const pr=await gh<any>(`/repos/${repo.full_name}/pulls`,token,{method:"POST",body:JSON.stringify({title:`AI Agent: ${command.slice(0,72)}`,head:newBranch,base:repo.default_branch,body:`طلب المستخدم:\n${command}\n\nالخطة:\n${JSON.stringify(plan,null,2)}`})});
         setResult(`تم رفع ZIP على فرع ${newBranch} وإنشاء Pull Request #${pr.number}. الفرع الأساسي لم يُمس.`);
         pushLog("CHECKPOINT: PR جاهز للمراجعة.");
         onDone();return;
@@ -243,7 +259,7 @@ ${wantsModify?`أعد JSON فقط:
         body:JSON.stringify({
           title:`AI Agent: ${command.slice(0,72)}`,
           head:newBranch,base:repo.default_branch,
-          body:`## AI Engineering Agent\\n\\n**الطلب:**\\n${command}\\n\\n**الخطة:**\\n${decision.summary||plan.summary||"—"}\\n\\n**الملفات:**\\n${changedPaths.map((x:string)=>`- ${x}`).join("\\n")}\\n\\n**Diff:**\\n${stats||"—"}\\n\\n**CI/status:**\\n${ci}\\n\\n> لم يتم تعديل الفرع الأساسي. المراجعة والدمج قرار بشري.`
+          body:`## AI Engineering Agent\\n\\n**الطلب:**\\n${command}\\n\\n**الخطة:**\\n${decision.summary||plan.summary||"—"}\\n\\n**الملفات:**\\n${changedPaths.map((x:string)=>`- ${x}`).join("\\n")}\\n\\n**Diff:**\\n${stats||"—"}\\n\\n**CI/status:**\\n${ci}\\n\\n**GitHub Actions:**\\n${ciDetail}\\n\\n> لم يتم تعديل الفرع الأساسي. المراجعة والدمج قرار بشري.`
         })
       });
       setResult(`اكتمل التنفيذ على ${newBranch}. تم إنشاء Pull Request #${pr.number}.\\n\\n${stats||"لا توجد إحصاءات diff."}`);

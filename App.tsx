@@ -257,9 +257,9 @@ function ZipUploader({ repos, token: _token, onDone }: { repos: Repo[]; token?: 
   };
 
   return (
-    <section className="mt-6 rounded-3xl border border-indigo-400/20 bg-indigo-500/5 p-5 sm:p-6">
+    <section id="zip-upload" className="mt-8 rounded-3xl border-2 border-indigo-400/40 bg-indigo-500/10 p-5 shadow-lg shadow-indigo-950/30 sm:p-6">
       <div className="flex items-start gap-3"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-500/20 text-xl">📦</div><div><h2 className="text-xl font-bold">رفع مشروع ZIP إلى GitHub</h2><p className="mt-1 text-sm text-slate-400">يفك ZIP داخل المتصفح ثم يرفعه إلى فرع معزول ويفتح Draft PR؛ لا يتم تعديل الفرع الأساسي مباشرة.</p></div></div>
-      <div className="mt-5 grid gap-3 md:grid-cols-3">
+      <div className="mt-5 mb-4 rounded-xl border border-indigo-300/20 bg-slate-950/50 px-4 py-3 text-sm text-indigo-100">اختر المستودع ← اختر ملف ZIP ← اضغط «رفع ZIP إلى GitHub». سيُنشأ فرع معزول وDraft PR ولن نلمس الفرع الأساسي مباشرة.</div><div className="mt-5 grid gap-3 md:grid-cols-3">
         <select value={repoName} onChange={(e) => setRepoName(e.target.value)} disabled={running} className="rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm" dir="ltr">{repos.map((r) => <option key={r.id} value={r.full_name}>{r.full_name}</option>)}</select>
         <input value={folder} onChange={(e) => setFolder(e.target.value)} disabled={running} placeholder="مجلد داخل المستودع (اختياري)" className="rounded-xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-white outline-none focus:border-indigo-400/60" dir="ltr" />
         <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-white/20 bg-white/5 px-4 py-3 text-sm text-slate-300 hover:bg-white/10"><input type="file" accept=".zip,application/zip" disabled={running} onChange={(e) => setZipFile(e.target.files?.[0] || null)} className="hidden" />{zipFile ? `📄 ${zipFile.name}` : "اختيار ملف ZIP"}</label>

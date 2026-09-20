@@ -3,8 +3,6 @@ import { useEffect, useMemo, useState } from "react";
 type RepoLite = { id:number; full_name:string; default_branch:string };
 declare global { interface Window { JSZip:any } }
 
-const API="https://api.github.com";
-const API_VERSION="2022-11-28";
 const MAX_FILES=8;
 const MAX_FILE_CHARS=70000;
 const MAX_TOTAL_CHARS=260000;
